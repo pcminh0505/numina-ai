@@ -24,14 +24,18 @@ src/
   App.tsx                    # Root: WagmiProvider + QueryClientProvider + sections
   lib/
     wagmi.ts                 # Wagmi config (chains, injected connector)
-    contracts.ts             # cUSD addresses, ABIs, COUNTER_CONTRACT_ADDRESS
+    contracts.ts             # ABIs (erc20Abi, counterAbi), COUNTER_CONTRACT_ADDRESS
+    tokens.ts                # Token registry — symbol, decimals, addresses per chain
+    feeCurrency.ts           # CIP-64 fee currency adapter addresses + helpers
   hooks/
     useAutoConnect.ts        # Auto-connect on load — required for MiniPay
   components/
     WalletInfo.tsx           # Address, network, chain ID, block number
-    BalanceDisplay.tsx       # Native CELO + cUSD ERC20 balance
+    BalanceDisplay.tsx       # Native CELO + ERC20 balances (batch multicall)
     CounterContract.tsx      # Read/write an on-chain SimpleCounter
-    SendTransaction.tsx      # Send CELO to any address
+    SendTransaction.tsx      # Send native CELO to any address
+    SendToken.tsx            # Send ERC20 tokens with fee abstraction (CIP-64)
+    NetworkSwitcher.tsx      # Switch between Celo mainnet and Celo Sepolia
 contracts/
   SimpleCounter.sol          # Deploy this to get a counter contract address
 ```
@@ -114,6 +118,51 @@ const { sendTransaction, data: txHash } = useSendTransaction();
 sendTransaction({ to: "0x...", value: parseEther("0.001") });
 ```
 
+### Send ERC20 token with fee abstraction (CIP-64)
+
+Use `erc20Abi` from viem (not the minimal one in `contracts.ts`) and pass `feeCurrency`:
+
+```ts
+import { encodeFunctionData, erc20Abi, parseUnits } from "viem";
+import { getFeeCurrencyAddress } from "./lib/feeCurrency";
+
+const { sendTransaction } = useSendTransaction();
+const chainId = useChainId();
+
+const data = encodeFunctionData({
+  abi: erc20Abi,
+  functionName: "transfer",
+  args: [recipientAddress, parseUnits(amount.toString(), decimals)],
+});
+
+// feeCurrency: adapter address for USDC/USDT, token address for USDm, undefined for CELO
+const feeCurrency = getFeeCurrencyAddress(feeTokenSymbol, chainId);
+
+sendTransaction({ to: TOKEN_CONTRACT_ADDRESS, feeCurrency, data });
+```
+
+> MiniPay may override `feeCurrency` and use the token the user has the most of.
+
+### Estimate gas with fee currency
+
+```ts
+const publicClient = usePublicClient() as any; // cast for Celo CIP-64 extensions
+
+const gasLimit = await publicClient.estimateGas({
+  account: address,
+  to: tokenAddress,
+  data: txData,
+  feeCurrency: feeCurrencyAddress, // undefined = native CELO
+});
+
+// eth_gasPrice with feeCurrency returns price in 18-decimal units always
+const gasPriceHex = await publicClient.request({
+  method: "eth_gasPrice",
+  params: feeCurrencyAddress ? [feeCurrencyAddress] : [],
+});
+const feeWei = gasLimit * fromHex(gasPriceHex, "bigint");
+```
+
 ## Token registry
 
 `src/lib/tokens.ts` is the single source of truth for token metadata and addresses.
@@ -124,7 +173,28 @@ import { TOKENS, NATIVE_TOKEN, ERC20_TOKENS } from "./lib/tokens";
 
 > **USDm = cUSD**: Mento rebranded cUSD to USDm. They share the same contract.
 
-To add a new token, add an entry to the `TOKENS` array in `tokens.ts` — the `BalanceDisplay` component picks it up automatically.
+To add a new token, add an entry to the `TOKENS` array in `tokens.ts` — `BalanceDisplay` and `SendToken` pick it up automatically.
+
+## Fee currency (CIP-64)
+
+`src/lib/feeCurrency.ts` holds adapter addresses for 6-decimal tokens and a helper:
+
+```ts
+import { getFeeCurrencyAddress, isSupportedFeeCurrency } from "./lib/feeCurrency";
+
+// Returns the right feeCurrency address for any token on any supported chain
+getFeeCurrencyAddress("USDm", celo.id)   // → USDm contract address (18 dec, no adapter)
+getFeeCurrencyAddress("USDC", celo.id)   // → USDC adapter (0x2F25...)
+getFeeCurrencyAddress("USDT", celo.id)   // → USDT adapter (0x0e2a...)
+getFeeCurrencyAddress("CELO", celo.id)   // → undefined (native, no feeCurrency)
+```
+
+Fee currency adapters (required for 6-decimal tokens):
+
+| Token | Mainnet adapter | Testnet adapter |
+| ----- | --------------- | --------------- |
+| USDC  | `0x2F25deB3848C207fc8E0c34035B3Ba7fC157602B` | `0x4822e58de6f5e485eF90df51C41CE01721331dC0` |
+| USDT  | `0x0e2a3e05bc9a16f5292a6170456a710cb89c6f72` | not deployed |
 
 ### Batch ERC20 balances
 

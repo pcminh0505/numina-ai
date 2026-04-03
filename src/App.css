@@ -363,6 +363,17 @@
   display: block;
 }
 
+/* ---- Not-in-MiniPay warning banner ---- */
+.minipay-warning {
+  background: rgba(251, 204, 92, 0.12);
+  border: 1px solid #fbcc5c;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text-h);
+  line-height: 1.5;
+}
+
 /* ---- Form fields ---- */
 .field {
   margin-bottom: 10px;
@@ -395,6 +406,49 @@
 
 .field input:disabled {
   opacity: 0.5;
+}
+
+.field select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-h);
+  font-size: 14px;
+  font-family: var(--sans);
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+  cursor: pointer;
+}
+
+.field select:focus {
+  border-color: #35d07f;
+}
+
+.field select:disabled {
+  opacity: 0.5;
+}
+
+/* ---- Compact inline input (exchange rate form) ---- */
+.inline-input {
+  width: 72px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-h);
+  font-size: 13px;
+  font-family: var(--sans);
+  outline: none;
+  text-align: center;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.inline-input:focus {
+  border-color: #35d07f;
 }
 
 /* ---- Status / error ---- */
