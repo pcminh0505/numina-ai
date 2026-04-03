@@ -35,7 +35,7 @@ export function CounterContract() {
   });
 
   // Refetch counter once after each confirmed transaction
-  const lastConfirmedTx = useRef<`0x${string}` | undefined>();
+  const lastConfirmedTx = useRef<`0x${string}` | undefined>(undefined);
   useEffect(() => {
     if (isSuccess && txHash && txHash !== lastConfirmedTx.current) {
       lastConfirmedTx.current = txHash;
