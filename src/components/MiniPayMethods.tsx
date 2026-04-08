@@ -19,7 +19,7 @@ export function MiniPayMethods() {
     error: rateError,
   } = useGetExchangeRate();
   const [from, setFrom] = useState("USDT");
-  const [to, setTo] = useState("NGN");
+  const [to, setTo] = useState("VND");
 
   if (!isConnected) return null;
 

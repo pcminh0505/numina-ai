@@ -323,13 +323,17 @@
 .btn-ghost {
   font-size: 12px;
   font-weight: 500;
-  padding: 4px 10px;
+  min-height: 44px;
+  padding: 0 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text);
   cursor: pointer;
   transition: opacity 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .btn-ghost:active {

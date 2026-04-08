@@ -16,6 +16,7 @@ import {
 } from "viem";
 import { ERC20_TOKENS, TOKENS, type Token } from "../lib/tokens";
 import { getFeeCurrencyAddress, isSupportedFeeCurrency } from "../lib/feeCurrency";
+import { DEEPLINKS } from "../lib/minipay";
 
 export function SendToken() {
   const { address, isConnected, chain } = useConnection();
@@ -34,18 +35,25 @@ export function SendToken() {
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
   const [recipientError, setRecipientError] = useState<string | null>(null);
+  const [amountError, setAmountError] = useState<string | null>(null);
   const [estimatedFee, setEstimatedFee] = useState<string | null>(null);
   const [estimatingFee, setEstimatingFee] = useState(false);
 
   // Reset selections when network changes
   useEffect(() => {
     const tokens = ERC20_TOKENS.filter((t) => !!t.addresses[chainId]);
-    setSelectedToken(tokens[0] ?? null);
+    const defaultToken = tokens[0] ?? null;
+    setSelectedToken(defaultToken);
+    // Per MiniPay docs: feeCurrency should match the token being sent.
+    // USDC → USDC adapter, USDm → USDm address, USDT → USDT adapter.
+    // This is required for MiniPay to correctly display the transfer amount.
     const currencies = TOKENS.filter((t) =>
       isSupportedFeeCurrency(t.symbol, chainId),
     );
-    const usdm = currencies.find((t) => t.symbol === "USDm");
-    setFeeCurrencyToken(usdm ?? currencies[0] ?? null);
+    const matching = defaultToken
+      ? currencies.find((t) => t.symbol === defaultToken.symbol)
+      : null;
+    setFeeCurrencyToken(matching ?? currencies[0] ?? null);
     setEstimatedFee(null);
   }, [chainId]);
 
@@ -74,6 +82,30 @@ export function SendToken() {
     return true;
   }
 
+  function validateAmount(raw: string): boolean {
+    const normalized = normalizeAmount(raw);
+    if (!normalized || isNaN(Number(normalized)) || Number(normalized) <= 0) {
+      setAmountError("Enter a valid amount");
+      return false;
+    }
+    if (selectedToken) {
+      const parts = normalized.split(".");
+      if (parts[1] && parts[1].length > selectedToken.decimals) {
+        setAmountError(`Max ${selectedToken.decimals} decimal places`);
+        return false;
+      }
+    }
+    setAmountError(null);
+    return true;
+  }
+
+  // Normalize decimal input: trim whitespace and replace locale comma separator.
+  // type="text" inputMode="decimal" can produce "1,5" on some locales — viem
+  // only accepts "." so we normalize before calling parseUnits / parseEther.
+  function normalizeAmount(raw: string): string {
+    return raw.trim().replace(",", ".");
+  }
+
   async function estimateFee() {
     if (!selectedToken || !address || !publicClient) return;
     const tokenAddr = selectedToken.addresses[chainId];
@@ -89,7 +121,10 @@ export function SendToken() {
     const txData = encodeFunctionData({
       abi: erc20Abi,
       functionName: "transfer",
-      args: [toAddr, parseUnits(amount || "0.001", selectedToken.decimals)],
+      args: [
+        toAddr,
+        parseUnits(normalizeAmount(amount) || "0.001", selectedToken.decimals),
+      ],
     });
 
     setEstimatingFee(true);
@@ -128,13 +163,15 @@ export function SendToken() {
     const tokenAddr = selectedToken.addresses[chainId];
     if (!tokenAddr) return;
     if (!validateRecipient(recipient)) return;
+    if (!validateAmount(amount)) return;
 
     reset();
     const to = (recipient.trim() || address) as `0x${string}`;
     let parsedAmount: bigint;
     try {
-      parsedAmount = parseUnits(amount, selectedToken.decimals);
+      parsedAmount = parseUnits(normalizeAmount(amount), selectedToken.decimals);
     } catch {
+      setAmountError("Invalid amount");
       return;
     }
 
@@ -174,6 +211,13 @@ export function SendToken() {
           onChange={(e) => {
             const t = availableTokens.find((x) => x.symbol === e.target.value);
             setSelectedToken(t ?? null);
+            // Keep fee currency in sync with selected token
+            if (t) {
+              const matching = availableFeeCurrencies.find(
+                (f) => f.symbol === t.symbol,
+              );
+              if (matching) setFeeCurrencyToken(matching);
+            }
             setEstimatedFee(null);
           }}
           disabled={isBusy}
@@ -203,17 +247,18 @@ export function SendToken() {
       <div className="field">
         <label>Amount ({selectedToken?.symbol})</label>
         <input
-          type="number"
-          step="0.01"
-          min="0"
+          type="text"
+          inputMode="decimal"
           placeholder="0.00"
           value={amount}
           onChange={(e) => {
             setAmount(e.target.value);
+            setAmountError(null);
             setEstimatedFee(null);
           }}
           disabled={isBusy}
         />
+        {amountError && <p className="error">{amountError}</p>}
       </div>
 
       <div className="field">
@@ -260,7 +305,25 @@ export function SendToken() {
             : `Send ${selectedToken?.symbol ?? "Token"}`}
       </button>
 
-      {error && <p className="error">{error.message.split("\n")[0]}</p>}
+      {error && (() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const code = (error as any).code ?? (error.cause as any)?.code;
+        if (code === 4001) {
+          return <p className="error">Transaction cancelled.</p>;
+        }
+        const msg = error.message.toLowerCase();
+        if (msg.includes("insufficient") || msg.includes("funds") || msg.includes("balance")) {
+          return (
+            <p className="error">
+              Insufficient funds.{" "}
+              <a href={DEEPLINKS.addCash()} className="tx-link" style={{ display: "inline" }}>
+                Add cash
+              </a>
+            </p>
+          );
+        }
+        return <p className="error">{error.message.split("\n")[0]}</p>;
+      })()}
       {isSuccess && <p className="status success">Transaction confirmed!</p>}
       {txHash && (
         <p className="tx-link">
