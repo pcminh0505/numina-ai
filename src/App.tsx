@@ -1,16 +1,18 @@
 import "./App.css";
-import { Component, type ReactNode } from "react";
+import { useState, Component, type ReactNode } from "react";
 import { useConnection, WagmiProvider } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { config } from "./lib/wagmi";
 import { useAutoConnect } from "./hooks/useAutoConnect";
 import { isMiniPayEnvironment } from "./lib/minipay";
-import { WalletInfo } from "./components/WalletInfo";
-import { BalanceDisplay } from "./components/BalanceDisplay";
+import { WalletInfo }      from "./components/WalletInfo";
+import { BalanceDisplay }  from "./components/BalanceDisplay";
 import { CounterContract } from "./components/CounterContract";
-import { SendToken } from "./components/SendToken";
-import { MiniPayMethods } from "./components/MiniPayMethods";
+import { SendToken }       from "./components/SendToken";
+import { MiniPayMethods }  from "./components/MiniPayMethods";
 import { NetworkSwitcher } from "./components/NetworkSwitcher";
+import { TabBar, type TabId } from "./components/TabBar";
+import { PokemonGame }    from "./components/pokemon/PokemonGame";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000 } },
@@ -21,9 +23,7 @@ class ErrorBoundary extends Component<
   { error: Error | null }
 > {
   state = { error: null };
-  static getDerivedStateFromError(error: Error) {
-    return { error };
-  }
+  static getDerivedStateFromError(error: Error) { return { error }; }
   render() {
     if (this.state.error) {
       return (
@@ -39,38 +39,47 @@ class ErrorBoundary extends Component<
 function AppContent() {
   useAutoConnect();
   const { isConnected, isConnecting } = useConnection();
+  const [activeTab, setActiveTab] = useState<TabId>("quiz");
 
   return (
     <div className="app">
       <header className="app-header">
-        <span className="app-title">MiniPay Starter</span>
+        <span className="app-title">MiniPay</span>
         <div className="header-right">
           <NetworkSwitcher />
           <span
             className={`status-dot ${isConnected ? "connected" : isConnecting ? "connecting" : ""}`}
-            title={
-              isConnected
-                ? "Connected"
-                : isConnecting
-                  ? "Connecting..."
-                  : "Disconnected"
-            }
+            title={isConnected ? "Connected" : isConnecting ? "Connecting…" : "Disconnected"}
           />
         </div>
       </header>
+
       <main className="app-main">
-        {!isMiniPayEnvironment() && (
+        {!isMiniPayEnvironment() && activeTab !== "quiz" && (
           <div className="minipay-warning">
-            Not running inside MiniPay. Open this app in MiniPay to access all
-            features. Some APIs (QR scan, exchange rate) will not work here.
+            Not running inside MiniPay. Some features require the MiniPay wallet.
           </div>
         )}
-        <WalletInfo />
-        <BalanceDisplay />
-        <CounterContract />
-        <SendToken />
-        <MiniPayMethods />
+
+        {activeTab === "quiz" && <PokemonGame />}
+
+        {activeTab === "wallet" && (
+          <>
+            <WalletInfo />
+            <BalanceDisplay />
+          </>
+        )}
+
+        {activeTab === "apps" && (
+          <>
+            <CounterContract />
+            <SendToken />
+            <MiniPayMethods />
+          </>
+        )}
       </main>
+
+      <TabBar active={activeTab} onChange={setActiveTab} />
     </div>
   );
 }
