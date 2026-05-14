@@ -141,6 +141,7 @@ export function NumerologyChat() {
   if (!profile) {
     return (
       <div className="numerology-chat">
+        <div className="nc-entry-scroll">
         <div className="nc-hero">
           <div className="nc-hero-icon">🔢</div>
           <h1 className="nc-hero-title">Numerology Reading</h1>
@@ -184,6 +185,7 @@ export function NumerologyChat() {
             Reveal My Numbers ✨
           </button>
         </form>
+        </div>
       </div>
     );
   }

@@ -14,9 +14,10 @@ app.use(express.json());
 // ── LLM backend selection ─────────────────────────────────────────────────────
 // If LLM_BASE_URL is set, route through any OpenAI-compatible endpoint (e.g. mlx_lm).
 // Otherwise fall back to the Anthropic API.
-const LLM_BASE_URL = process.env.LLM_BASE_URL?.replace(/\/$/, '');
-const LLM_MODEL    = process.env.LLM_MODEL ?? 'default';
-const LLM_API_KEY  = process.env.LLM_API_KEY ?? 'local';
+const LLM_BASE_URL       = process.env.LLM_BASE_URL?.replace(/\/$/, '');
+const LLM_MODEL          = process.env.LLM_MODEL ?? 'default';
+const LLM_API_KEY        = process.env.LLM_API_KEY ?? 'local';
+const LLM_ENABLE_THINKING = process.env.LLM_ENABLE_THINKING !== 'false';
 
 const anthropic = LLM_BASE_URL
   ? null
@@ -36,12 +37,66 @@ interface ChatMessage {
 
 // ── Streaming helpers ─────────────────────────────────────────────────────────
 
+// ── Thinking-token filter ─────────────────────────────────────────────────────
+// Qwen3 (and some other reasoning models) emit <think>…</think> blocks.
+// When LLM_ENABLE_THINKING=false we strip them from the stream so they never
+// reach the chat UI.  We need a stateful buffer because the open/close tags
+// can arrive split across multiple SSE chunks.
+class ThinkingFilter {
+  private buf = '';
+  private inside = false;
+
+  feed(text: string): string {
+    if (LLM_ENABLE_THINKING) return text; // pass-through when thinking is on
+
+    this.buf += text;
+    let out = '';
+
+    while (this.buf.length > 0) {
+      if (this.inside) {
+        const close = this.buf.indexOf('</think>');
+        if (close === -1) {
+          // Keep buffering — the closing tag hasn't arrived yet.
+          // Retain up to 8 chars in case the tag is split across chunks.
+          if (this.buf.length > 8) this.buf = this.buf.slice(-8);
+          break;
+        }
+        this.inside = false;
+        this.buf = this.buf.slice(close + 8); // skip past </think>
+      } else {
+        const open = this.buf.indexOf('<think>');
+        if (open === -1) {
+          // No opening tag anywhere — safe to emit everything except a
+          // possible partial tag at the very end.
+          const safe = this.buf.length > 7 ? this.buf.length - 7 : 0;
+          out += this.buf.slice(0, safe);
+          this.buf = this.buf.slice(safe);
+          break;
+        }
+        out += this.buf.slice(0, open); // emit text before <think>
+        this.inside = true;
+        this.buf = this.buf.slice(open + 7); // skip past <think>
+      }
+    }
+
+    return out;
+  }
+
+  /** Flush any remaining buffered text once the stream ends. */
+  flush(): string {
+    if (LLM_ENABLE_THINKING || this.inside) return '';
+    const out = this.buf;
+    this.buf = '';
+    return out;
+  }
+}
+
 async function streamOpenAI(
   systemPrompt: string,
   messages: ChatMessage[],
   res: Response
 ): Promise<void> {
-  const body = JSON.stringify({
+  const requestBody: Record<string, unknown> = {
     model: LLM_MODEL,
     stream: true,
     max_tokens: 2048,
@@ -49,7 +104,15 @@ async function streamOpenAI(
       { role: 'system', content: systemPrompt },
       ...messages,
     ],
-  });
+  };
+
+  // Ask the model to skip reasoning tokens when thinking is disabled.
+  // mlx_lm honours this via chat_template_kwargs; some providers use
+  // a top-level "thinking" field — we send both for compatibility.
+  if (!LLM_ENABLE_THINKING) {
+    requestBody['chat_template_kwargs'] = { enable_thinking: false };
+    requestBody['thinking'] = { type: 'disabled' };
+  }
 
   const upstream = await fetch(`${LLM_BASE_URL}/chat/completions`, {
     method: 'POST',
@@ -57,7 +120,7 @@ async function streamOpenAI(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${LLM_API_KEY}`,
     },
-    body,
+    body: JSON.stringify(requestBody),
   });
 
   if (!upstream.ok || !upstream.body) {
@@ -67,6 +130,7 @@ async function streamOpenAI(
 
   const reader = upstream.body.getReader();
   const decoder = new TextDecoder();
+  const filter = new ThinkingFilter();
   let buf = '';
 
   while (true) {
@@ -86,13 +150,19 @@ async function streamOpenAI(
         const chunk = JSON.parse(payload) as {
           choices?: Array<{ delta?: { content?: string } }>;
         };
-        const text = chunk.choices?.[0]?.delta?.content;
+        const raw = chunk.choices?.[0]?.delta?.content;
+        if (!raw) continue;
+        const text = filter.feed(raw);
         if (text) res.write(`data: ${JSON.stringify({ text })}\n\n`);
       } catch {
         // ignore malformed chunks
       }
     }
   }
+
+  // Flush any trailing text the filter was holding back
+  const tail = filter.flush();
+  if (tail) res.write(`data: ${JSON.stringify({ text: tail })}\n\n`);
 }
 
 async function streamAnthropic(
@@ -154,7 +224,12 @@ app.post('/api/chat', async (req, res) => {
 });
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, backend: LLM_BASE_URL ? 'local' : 'anthropic' });
+  res.json({
+    ok: true,
+    backend: LLM_BASE_URL ? 'local' : 'anthropic',
+    model: LLM_BASE_URL ? LLM_MODEL : 'claude-sonnet-4-6',
+    thinking: LLM_ENABLE_THINKING,
+  });
 });
 
 const PORT = process.env.PORT ?? 3001;
