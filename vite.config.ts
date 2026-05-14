@@ -7,6 +7,9 @@ export default defineConfig({
   plugins: [react(), babel({ presets: [reactCompilerPreset()] })],
   server: {
     allowedHosts: [".ngrok.app", ".ngrok-free.dev", ".ngrok-free.app"],
+    proxy: {
+      "/api": "http://localhost:3001",
+    },
   },
   build: {
     outDir: "dist",

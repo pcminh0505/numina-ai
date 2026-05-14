@@ -17,6 +17,38 @@
   flex: 1;
 }
 
+/* ---- Tabs ---- */
+.app-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+
+.app-tab {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 10px;
+  transition: color 0.15s, border-color 0.15s;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.app-tab--active {
+  color: var(--text-h);
+  border-bottom-color: #7c3aed;
+  font-weight: 600;
+}
+
+.app-tab:hover:not(.app-tab--active) {
+  color: var(--text-1);
+}
+
 .app-header {
   display: flex;
   align-items: center;
