@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useConnection } from 'wagmi';
+import { useConnection, useChainId } from 'wagmi';
 import { useQueryClient } from '@tanstack/react-query';
 import { computeNumerologyProfile, computeAdvancedProfile, formatRulingNumber } from '../lib/numerology';
 import { useCredits } from '../hooks/useCredits';
@@ -26,6 +26,7 @@ const INITIAL_PROMPT =
 
 export function NumerologyChat() {
   const { address } = useConnection();
+  const chainId = useChainId();
   const queryClient = useQueryClient();
 
   const [phase, setPhase]       = useState<NumerologyPhase>('entry');
@@ -111,6 +112,7 @@ export function NumerologyChat() {
             messages: newMessages,
             wallet: address,
             tier: isAdvancedUnlocked ? 'advanced' : 'free',
+            chainId,
           }),
           signal: abortRef.current.signal,
         });

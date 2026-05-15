@@ -3,8 +3,9 @@ const REFERRAL_BONUS = 5;
 const PAID_CREDITS_COUNT = 20;
 
 export interface UserCredits {
-  chatMessages: number;
-  advancedUnlocked: boolean;
+  chatMessages: number;      // free + referral credits (reset daily)
+  onChainCreditsUsed: number; // how many on-chain purchased credits have been consumed
+  advancedUnlocked: boolean; // server-side fallback (on-chain is source of truth)
   lastResetDate: string;
   referredBy: string | null;
 }
@@ -20,6 +21,7 @@ function getOrCreate(address: string): UserCredits {
   if (!store.has(key)) {
     store.set(key, {
       chatMessages: FREE_DAILY_MESSAGES,
+      onChainCreditsUsed: 0,
       advancedUnlocked: false,
       lastResetDate: today(),
       referredBy: null,
@@ -44,11 +46,22 @@ export function getCredits(address: string): UserCredits & { freeRemaining: numb
   return { ...credits, freeRemaining: Math.min(credits.chatMessages, FREE_DAILY_MESSAGES) };
 }
 
+/** Deduct a free/referral credit. Returns false if none left. */
 export function deductChat(address: string): boolean {
   const credits = getOrCreate(address);
   if (credits.chatMessages <= 0) return false;
   credits.chatMessages--;
   return true;
+}
+
+/** Deduct one on-chain credit (call only after confirming on-chain balance covers it). */
+export function deductOnChainCredit(address: string): void {
+  getOrCreate(address.toLowerCase()).onChainCreditsUsed++;
+}
+
+/** How many on-chain credits have been consumed server-side. */
+export function getOnChainCreditsUsed(address: string): number {
+  return getOrCreate(address.toLowerCase()).onChainCreditsUsed;
 }
 
 export function addChatCredits(address: string, count: number = PAID_CREDITS_COUNT): void {

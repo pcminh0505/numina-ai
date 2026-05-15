@@ -1,83 +1,85 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useChainId, useSendTransaction, useWaitForTransactionReceipt } from 'wagmi';
-import { encodeFunctionData, erc20Abi } from 'viem';
-import { getFeeCurrencyAddress } from '../lib/feeCurrency';
-import { buildPaymentConfig, CREDITS_PRICE } from '../lib/x402';
+import { useState, useCallback } from 'react';
+import { useChainId, usePublicClient, useWalletClient } from 'wagmi';
+import { erc20Abi } from 'viem';
 import { useQueryClient } from '@tanstack/react-query';
+import { USDC_ADDRESSES, CREDITS_PRICE } from '../lib/x402';
+import { getFeeCurrencyAddress } from '../lib/feeCurrency';
+import { READING_CONTRACT_ABI, getReadingContractAddress } from '../lib/readingContract';
 
 export function useBuyCredits(wallet: string | undefined) {
-  const chainId = useChainId();
-  const queryClient = useQueryClient();
+  const chainId      = useChainId();
+  const queryClient  = useQueryClient();
+  const publicClient = usePublicClient();
+  const { data: walletClient } = useWalletClient();
 
-  const {
-    sendTransaction,
-    data: txHash,
-    isPending,
-    error: sendError,
-    reset,
-  } = useSendTransaction();
+  const contractAddress = getReadingContractAddress(chainId);
 
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
-    hash: txHash,
-  });
-
+  const [isPaying,    setIsPaying]    = useState(false);
   const [didPurchase, setDidPurchase] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [verifyError, setVerifyError] = useState<string | null>(null);
-  const verifiedTxRef = useRef<string | undefined>(undefined);
+  const [error,       setError]       = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!isSuccess || !txHash || !wallet) return;
-    if (verifiedTxRef.current === txHash) return;
-    verifiedTxRef.current = txHash;
-
-    setIsVerifying(true);
-    setVerifyError(null);
-
-    fetch('/api/buy-credits', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wallet, txHash, chainId }),
-    })
-      .then(r => r.json())
-      .then((data: { ok?: boolean; error?: string }) => {
-        if (data.ok) {
-          setDidPurchase(true);
-          void queryClient.invalidateQueries({ queryKey: ['credits', wallet] });
-        } else {
-          setVerifyError(data.error ?? 'Verification failed');
-        }
-      })
-      .catch(() => setVerifyError('Network error during verification'))
-      .finally(() => setIsVerifying(false));
-  }, [isSuccess, txHash, wallet, chainId, queryClient]);
-
-  const initiate = useCallback(() => {
-    if (!wallet) return;
-    const config = buildPaymentConfig(chainId, CREDITS_PRICE);
-    if (!config) {
-      setVerifyError('Payment not configured (VITE_X402_TREASURY_ADDRESS missing)');
+  const initiate = useCallback(async () => {
+    if (!wallet || !walletClient || !publicClient) return;
+    if (!contractAddress) {
+      setError('Contract not deployed — add VITE_READING_CONTRACT_TESTNET to .env after deploying');
       return;
     }
-    reset();
-    setVerifyError(null);
+    const usdcAddress = USDC_ADDRESSES[chainId];
+    if (!usdcAddress) { setError('USDC not available on this chain'); return; }
+
+    setIsPaying(true);
     setDidPurchase(false);
-    const data = encodeFunctionData({
-      abi: erc20Abi,
-      functionName: 'transfer',
-      args: [config.payTo, config.amountUnits],
-    });
-    const feeCurrency = getFeeCurrencyAddress(config.feeCurrencySymbol, chainId);
+    setError(null);
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (sendTransaction as any)({ to: config.asset, data, feeCurrency });
-  }, [wallet, chainId, sendTransaction, reset]);
+    const write = walletClient.writeContract as (args: any) => Promise<`0x${string}`>;
+    const feeCurrency = getFeeCurrencyAddress('USDC', chainId);
+
+    try {
+      // 1. Approve (1 pack worth of USDC)
+      const allowance = await publicClient.readContract({
+        address: usdcAddress,
+        abi: erc20Abi,
+        functionName: 'allowance',
+        args: [wallet as `0x${string}`, contractAddress],
+      }) as bigint;
+
+      if (allowance < CREDITS_PRICE) {
+        const approveHash = await write({
+          address: usdcAddress,
+          abi: erc20Abi,
+          functionName: 'approve',
+          args: [contractAddress, CREDITS_PRICE],
+          feeCurrency,
+        });
+        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      }
+
+      // 2. Buy 1 pack (20 credits)
+      const buyHash = await write({
+        address: contractAddress,
+        abi: READING_CONTRACT_ABI,
+        functionName: 'buyCredits',
+        args: [1n],
+        feeCurrency,
+      });
+      await publicClient.waitForTransactionReceipt({ hash: buyHash });
+
+      setDidPurchase(true);
+      void queryClient.invalidateQueries({ queryKey: ['credits', wallet] });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Transaction failed');
+    } finally {
+      setIsPaying(false);
+    }
+  }, [wallet, walletClient, publicClient, contractAddress, chainId, queryClient]);
 
   return {
     didPurchase,
-    isPaying: isPending,
-    isConfirming,
-    isVerifying,
+    isPaying,
+    isConfirming: false,
+    isVerifying: false,
     initiate,
-    error: sendError?.message ?? verifyError,
+    error,
   };
 }

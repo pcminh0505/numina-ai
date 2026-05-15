@@ -4,13 +4,15 @@ loadEnv();
 import express, { type Response } from 'express';
 import cors from 'cors';
 import Anthropic from '@anthropic-ai/sdk';
-import { createPublicClient, http, decodeEventLog, parseAbiItem } from 'viem';
+import { createPublicClient, http, decodeEventLog, parseAbiItem, parseAbi } from 'viem';
 import { celo, celoSepolia } from 'viem/chains';
 import { computeNumerologyProfile, computeAdvancedProfile } from '../src/lib/numerology.js';
 import { buildSystemPrompt } from './bookExtractor.js';
 import {
   getCredits,
   deductChat,
+  deductOnChainCredit,
+  getOnChainCreditsUsed,
   addChatCredits,
   unlockAdvanced,
   resetDailyIfNeeded,
@@ -55,6 +57,48 @@ const CREDITS_PRICE    = BigInt(process.env.X402_CREDITS_PRICE  ?? '200000');
 const TRANSFER_ABI = parseAbiItem(
   'event Transfer(address indexed from, address indexed to, uint256 value)',
 );
+
+// ── NumerologyReading contract (on-chain source of truth) ────────────────────
+const READING_CONTRACT_ABI = parseAbi([
+  'function hasAdvanced(address user) view returns (bool)',
+  'function creditsPurchased(address user) view returns (uint256)',
+]);
+
+const READING_CONTRACT: Partial<Record<number, `0x${string}`>> = {
+  [celo.id]:        (process.env.READING_CONTRACT_MAINNET ?? '') as `0x${string}`,
+  [celoSepolia.id]: (process.env.READING_CONTRACT_TESTNET ?? '') as `0x${string}`,
+};
+
+async function getOnChainState(
+  wallet: string,
+  chainId: number,
+): Promise<{ hasAdvanced: boolean; creditsPurchased: bigint } | null> {
+  const contractAddress = READING_CONTRACT[chainId];
+  if (!contractAddress || contractAddress.length < 10) return null;
+
+  const chain = chainId === celo.id ? celo : celoSepolia;
+  const client = createPublicClient({ chain, transport: http() });
+
+  try {
+    const [adv, credits] = await Promise.all([
+      client.readContract({
+        address: contractAddress,
+        abi: READING_CONTRACT_ABI,
+        functionName: 'hasAdvanced',
+        args: [wallet as `0x${string}`],
+      }),
+      client.readContract({
+        address: contractAddress,
+        abi: READING_CONTRACT_ABI,
+        functionName: 'creditsPurchased',
+        args: [wallet as `0x${string}`],
+      }),
+    ]);
+    return { hasAdvanced: adv as boolean, creditsPurchased: credits as bigint };
+  } catch {
+    return null;
+  }
+}
 
 async function verifyUsdcTransfer(
   txHash: `0x${string}`,
@@ -244,12 +288,13 @@ async function streamAnthropic(
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 app.post('/api/chat', async (req, res) => {
-  const { name, birthday, messages, wallet, tier } = req.body as {
+  const { name, birthday, messages, wallet, tier, chainId: reqChainId } = req.body as {
     name: string;
     birthday: string;
     messages: ChatMessage[];
     wallet?: string;
     tier?: 'free' | 'advanced';
+    chainId?: number;
   };
 
   if (!name || !birthday || !Array.isArray(messages)) {
@@ -260,10 +305,18 @@ app.post('/api/chat', async (req, res) => {
   // Credit gating — only enforce when wallet is provided
   if (wallet) {
     resetDailyIfNeeded(wallet);
-    const ok = deductChat(wallet);
-    if (!ok) {
-      res.status(402).json({ error: 'credits_depleted' });
-      return;
+    const hasFree = deductChat(wallet);
+    if (!hasFree) {
+      // Check on-chain credits as fallback
+      const chainId  = reqChainId ?? celo.id;
+      const onChain  = await getOnChainState(wallet, chainId);
+      const purchased = Number(onChain?.creditsPurchased ?? 0n);
+      const used      = getOnChainCreditsUsed(wallet);
+      if (purchased <= used) {
+        res.status(402).json({ error: 'credits_depleted' });
+        return;
+      }
+      deductOnChainCredit(wallet);
     }
   }
 
@@ -299,13 +352,26 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-app.get('/api/credits', (req, res) => {
-  const wallet = req.query.wallet as string | undefined;
+app.get('/api/credits', async (req, res) => {
+  const wallet  = req.query.wallet  as string | undefined;
+  const chainId = parseInt((req.query.chainId as string) ?? String(celo.id), 10);
   if (!wallet) {
     res.status(400).json({ error: 'wallet is required' });
     return;
   }
-  res.json(getCredits(wallet));
+
+  const serverState = getCredits(wallet);
+  const onChain     = await getOnChainState(wallet, chainId);
+  const onChainPurchased = Number(onChain?.creditsPurchased ?? 0n);
+  const onChainUsed      = getOnChainCreditsUsed(wallet);
+  const onChainRemaining = Math.max(0, onChainPurchased - onChainUsed);
+
+  res.json({
+    ...serverState,
+    advancedUnlocked: serverState.advancedUnlocked || (onChain?.hasAdvanced ?? false),
+    chatMessages: serverState.chatMessages + onChainRemaining,
+    freeRemaining: serverState.freeRemaining,
+  });
 });
 
 app.post('/api/unlock-advanced', async (req, res) => {

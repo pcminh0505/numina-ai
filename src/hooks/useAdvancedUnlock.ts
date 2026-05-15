@@ -1,86 +1,92 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useChainId, useSendTransaction, useWaitForTransactionReceipt } from 'wagmi';
-import { encodeFunctionData, erc20Abi } from 'viem';
-import { getFeeCurrencyAddress } from '../lib/feeCurrency';
-import { buildPaymentConfig, ADVANCED_PRICE } from '../lib/x402';
+import { useState, useCallback } from 'react';
+import { useChainId, usePublicClient, useReadContract, useWalletClient } from 'wagmi';
+import { erc20Abi } from 'viem';
 import { useQueryClient } from '@tanstack/react-query';
+import { USDC_ADDRESSES, ADVANCED_PRICE } from '../lib/x402';
+import { getFeeCurrencyAddress } from '../lib/feeCurrency';
+import { READING_CONTRACT_ABI, getReadingContractAddress } from '../lib/readingContract';
 
 export function useAdvancedUnlock(wallet: string | undefined) {
-  const chainId = useChainId();
-  const queryClient = useQueryClient();
+  const chainId      = useChainId();
+  const queryClient  = useQueryClient();
+  const publicClient = usePublicClient();
+  const { data: walletClient } = useWalletClient();
 
-  const {
-    sendTransaction,
-    data: txHash,
-    isPending,
-    error: sendError,
-    reset,
-  } = useSendTransaction();
+  const contractAddress = getReadingContractAddress(chainId);
 
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({
-    hash: txHash,
+  // Read unlock state directly from the contract (on-chain source of truth)
+  const { data: isUnlocked = false, refetch } = useReadContract({
+    address: contractAddress,
+    abi: READING_CONTRACT_ABI,
+    functionName: 'hasAdvanced',
+    args: [wallet as `0x${string}`],
+    query: { enabled: !!contractAddress && !!wallet },
   });
 
-  const [isUnlocked, setIsUnlocked] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [verifyError, setVerifyError] = useState<string | null>(null);
-  const verifiedTxRef = useRef<string | undefined>(undefined);
+  const [isPaying, setIsPaying] = useState(false);
+  const [error, setError]       = useState<string | null>(null);
 
-  // After tx confirmed, notify server to verify and unlock
-  useEffect(() => {
-    if (!isSuccess || !txHash || !wallet) return;
-    if (verifiedTxRef.current === txHash) return;
-    verifiedTxRef.current = txHash;
-
-    setIsVerifying(true);
-    setVerifyError(null);
-
-    fetch('/api/unlock-advanced', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wallet, txHash, chainId }),
-    })
-      .then(r => r.json())
-      .then((data: { ok?: boolean; error?: string }) => {
-        if (data.ok) {
-          setIsUnlocked(true);
-          void queryClient.invalidateQueries({ queryKey: ['credits', wallet] });
-        } else {
-          setVerifyError(data.error ?? 'Verification failed');
-        }
-      })
-      .catch(() => setVerifyError('Network error during verification'))
-      .finally(() => setIsVerifying(false));
-  }, [isSuccess, txHash, wallet, chainId, queryClient]);
-
-  const initiate = useCallback(() => {
-    if (!wallet) return;
-    const config = buildPaymentConfig(chainId, ADVANCED_PRICE);
-    if (!config) {
-      setVerifyError('Payment not configured (VITE_X402_TREASURY_ADDRESS missing)');
+  const initiate = useCallback(async () => {
+    if (!wallet || !walletClient || !publicClient) return;
+    if (!contractAddress) {
+      setError('Contract not deployed — add VITE_READING_CONTRACT_TESTNET to .env after deploying');
       return;
     }
-    reset();
-    setVerifyError(null);
-    const data = encodeFunctionData({
-      abi: erc20Abi,
-      functionName: 'transfer',
-      args: [config.payTo, config.amountUnits],
-    });
-    const feeCurrency = getFeeCurrencyAddress(config.feeCurrencySymbol, chainId);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (sendTransaction as any)({ to: config.asset, data, feeCurrency });
-  }, [wallet, chainId, sendTransaction, reset]);
+    const usdcAddress = USDC_ADDRESSES[chainId];
+    if (!usdcAddress) { setError('USDC not available on this chain'); return; }
 
-  const error = sendError?.message ?? verifyError;
+    setIsPaying(true);
+    setError(null);
+
+    // Helper: cast away Celo-extension types that viem doesn't type natively
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const write = walletClient.writeContract as (args: any) => Promise<`0x${string}`>;
+    const feeCurrency = getFeeCurrencyAddress('USDC', chainId);
+
+    try {
+      // 1. Approve the contract to spend USDC (if not already sufficient)
+      const allowance = await publicClient.readContract({
+        address: usdcAddress,
+        abi: erc20Abi,
+        functionName: 'allowance',
+        args: [wallet as `0x${string}`, contractAddress],
+      }) as bigint;
+
+      if (allowance < ADVANCED_PRICE) {
+        const approveHash = await write({
+          address: usdcAddress,
+          abi: erc20Abi,
+          functionName: 'approve',
+          args: [contractAddress, ADVANCED_PRICE],
+          feeCurrency,
+        });
+        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      }
+
+      // 2. Call unlockAdvanced() — contract pulls USDC and sets hasAdvanced[msg.sender]
+      const unlockHash = await write({
+        address: contractAddress,
+        abi: READING_CONTRACT_ABI,
+        functionName: 'unlockAdvanced',
+        feeCurrency,
+      });
+      await publicClient.waitForTransactionReceipt({ hash: unlockHash });
+
+      await refetch();
+      void queryClient.invalidateQueries({ queryKey: ['credits', wallet] });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Transaction failed');
+    } finally {
+      setIsPaying(false);
+    }
+  }, [wallet, walletClient, publicClient, contractAddress, chainId, refetch, queryClient]);
 
   return {
-    isUnlocked,
-    isPaying: isPending,
-    isConfirming,
-    isVerifying,
+    isUnlocked: isUnlocked as boolean,
+    isPaying,
+    isConfirming: false,
+    isVerifying: false,
     initiate,
     error,
-    txHash,
   };
 }

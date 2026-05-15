@@ -9,7 +9,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "register:agent": "tsx scripts/registerERC8004.ts"
+    "register:agent": "tsx scripts/registerERC8004.ts",
+    "deploy:contract": "tsx scripts/deployNumerologyReading.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",
