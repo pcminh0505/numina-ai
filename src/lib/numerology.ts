@@ -129,3 +129,108 @@ export const BIRTH_CHART_PLANES = {
   soul: [2, 5, 8],
   mind: [3, 6, 9],
 };
+
+// ── Advanced numerology types ──────────────────────────────────────────────
+
+export interface PinnaclePhase {
+  number: number | string;
+  ageStart: number;
+  ageEnd: number; // 999 = no end (last pinnacle)
+}
+
+export interface PinnacleSet {
+  first: PinnaclePhase;
+  second: PinnaclePhase;
+  third: PinnaclePhase;
+  fourth: PinnaclePhase;
+}
+
+export interface ChallengeSet {
+  first: number;
+  second: number;
+  main: number;
+}
+
+export interface AdvancedNumerologyProfile extends NumerologyProfile {
+  personalYear: number | string;
+  pinnacles: PinnacleSet;
+  challenges: ChallengeSet;
+}
+
+// Convert a number|string ruling number to its numeric value for arithmetic
+function rulingToNumeric(n: number | string): number {
+  if (n === '22/4') return 22;
+  return Number(n);
+}
+
+// Reduce a number without stopping at master numbers (for challenge arithmetic)
+function reduceSimple(n: number): number {
+  while (n > 9) {
+    n = String(n).split('').map(Number).reduce((a, b) => a + b, 0);
+  }
+  return n;
+}
+
+export function calculatePersonalYear(birthday: string, year?: number): number | string {
+  const targetYear = year ?? new Date().getFullYear();
+  const [, monthStr, dayStr] = birthday.split('-');
+  const month = parseInt(monthStr, 10);
+  const day = parseInt(dayStr, 10);
+  const yearDigits = String(targetYear).split('').map(Number).reduce((a, b) => a + b, 0);
+  return reduceNumber(day + month + yearDigits);
+}
+
+export function calculatePinnacles(birthday: string): PinnacleSet {
+  const [yearStr, monthStr, dayStr] = birthday.split('-');
+  const month = parseInt(monthStr, 10);
+  const day = parseInt(dayStr, 10);
+  const yearSum = String(yearStr).split('').map(Number).reduce((a, b) => a + b, 0);
+
+  const first = reduceNumber(month + day);
+  const second = reduceNumber(day + yearSum);
+  const third = reduceNumber(rulingToNumeric(first) + rulingToNumeric(second));
+  const fourth = reduceNumber(month + yearSum);
+
+  const ruling = calculateRulingNumber(birthday);
+  const rulingNum = rulingToNumeric(ruling);
+  // Age boundaries: 36 − rulingNumber marks start of 2nd pinnacle
+  const p2Start = 36 - rulingNum;
+
+  return {
+    first:  { number: first,  ageStart: 0,           ageEnd: p2Start - 1 },
+    second: { number: second, ageStart: p2Start,      ageEnd: p2Start + 8 },
+    third:  { number: third,  ageStart: p2Start + 9,  ageEnd: p2Start + 17 },
+    fourth: { number: fourth, ageStart: p2Start + 18, ageEnd: 999 },
+  };
+}
+
+export function calculateChallenges(birthday: string): ChallengeSet {
+  const [yearStr, monthStr, dayStr] = birthday.split('-');
+  const month = parseInt(monthStr, 10);
+  const day = parseInt(dayStr, 10);
+  const yearSum = String(yearStr).split('').map(Number).reduce((a, b) => a + b, 0);
+
+  const reducedM = reduceSimple(month);
+  const reducedD = reduceSimple(day);
+  const reducedY = reduceSimple(yearSum);
+
+  const first = Math.abs(reducedM - reducedD);
+  const second = Math.abs(reducedD - reducedY);
+  const main = Math.abs(first - second);
+
+  return { first, second, main };
+}
+
+export function computeAdvancedProfile(
+  name: string,
+  birthday: string,
+  year?: number,
+): AdvancedNumerologyProfile {
+  const base = computeNumerologyProfile(name, birthday);
+  return {
+    ...base,
+    personalYear: calculatePersonalYear(birthday, year),
+    pinnacles: calculatePinnacles(birthday),
+    challenges: calculateChallenges(birthday),
+  };
+}

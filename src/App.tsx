@@ -4,6 +4,7 @@ import { useConnection, WagmiProvider } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { config } from "./lib/wagmi";
 import { useAutoConnect } from "./hooks/useAutoConnect";
+import { useReferral } from "./hooks/useReferral";
 import { isMiniPayEnvironment } from "./lib/minipay";
 import { WalletInfo } from "./components/WalletInfo";
 import { BalanceDisplay } from "./components/BalanceDisplay";
@@ -41,7 +42,8 @@ type Tab = "wallet" | "numerology";
 
 function AppContent() {
   useAutoConnect();
-  const { isConnected, isConnecting } = useConnection();
+  const { address, isConnected, isConnecting } = useConnection();
+  useReferral(address);
   const [activeTab, setActiveTab] = useState<Tab>("wallet");
 
   return (

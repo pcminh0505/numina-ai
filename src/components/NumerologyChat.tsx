@@ -1,6 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { computeNumerologyProfile, formatRulingNumber } from '../lib/numerology';
+import { useConnection } from 'wagmi';
+import { useQueryClient } from '@tanstack/react-query';
+import { computeNumerologyProfile, computeAdvancedProfile, formatRulingNumber } from '../lib/numerology';
+import { useCredits } from '../hooks/useCredits';
+import { useAdvancedUnlock } from '../hooks/useAdvancedUnlock';
+import { useBuyCredits } from '../hooks/useBuyCredits';
+import { NumerologyProfile } from './NumerologyProfile';
+import { NumerologyAdvanced } from './NumerologyAdvanced';
 import './NumerologyChat.css';
+
+type NumerologyPhase = 'entry' | 'profile' | 'advanced' | 'chat';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -12,18 +21,60 @@ interface ProfileData {
   birthday: string;
 }
 
-const INITIAL_PROMPT = (name: string) =>
-  `Please give me a complete numerology reading for ${name}. Start with my Ruling Number and what it means for my life purpose, then cover my Day Number, Soul Urge, and Birth Chart. Use insights from "The Complete Book of Numerology" by David Phillips.`;
+const INITIAL_PROMPT =
+  `Hi! I just saw my numerology profile. What's the most interesting or surprising thing you notice about my numbers? Start with the one insight that feels most "me" — keep it short and conversational, and ask me something at the end so we can dig deeper.`;
 
 export function NumerologyChat() {
-  const [profile, setProfile] = useState<ProfileData | null>(null);
+  const { address } = useConnection();
+  const queryClient = useQueryClient();
+
+  const [phase, setPhase]       = useState<NumerologyPhase>('entry');
+  const [profileData, setProfileData] = useState<ProfileData | null>(null);
   const [formData, setFormData] = useState({ name: '', birthday: '' });
   const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
+  const [input, setInput]       = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const abortRef       = useRef<AbortController | null>(null);
+
+  const { data: credits, refetch: refetchCredits } = useCredits(address);
+  const advancedUnlock = useAdvancedUnlock(address);
+  const buyCredits     = useBuyCredits(address);
+
+  // ── Session persistence ───────────────────────────────────────────────────
+  // Hydrate from localStorage when wallet address becomes available
+  useEffect(() => {
+    const key = `numerology_session_${address ?? 'guest'}`;
+    try {
+      const stored = localStorage.getItem(key);
+      if (!stored) return;
+      const saved = JSON.parse(stored) as {
+        profileData: ProfileData;
+        messages: Message[];
+        phase: 'profile' | 'chat';
+      };
+      if (saved.profileData?.name && saved.profileData?.birthday) {
+        setProfileData(saved.profileData);
+        setFormData({ name: saved.profileData.name, birthday: saved.profileData.birthday });
+        setMessages(saved.messages ?? []);
+        setPhase(saved.phase === 'chat' ? 'chat' : 'profile');
+      }
+    } catch {
+      // ignore corrupt / missing data
+    }
+  }, [address]);
+
+  // Persist session on every state change
+  useEffect(() => {
+    if (!profileData || phase === 'entry') return;
+    const key = `numerology_session_${address ?? 'guest'}`;
+    try {
+      localStorage.setItem(key, JSON.stringify({ profileData, messages, phase }));
+    } catch {
+      // storage quota exceeded or private mode
+    }
+  }, [profileData, messages, phase, address]);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -33,9 +84,12 @@ export function NumerologyChat() {
     scrollToBottom();
   }, [messages, streamingText, scrollToBottom]);
 
+  const isAdvancedUnlocked =
+    advancedUnlock.isUnlocked || (credits?.advancedUnlocked ?? false);
+
   const sendMessage = useCallback(
     async (userMessage: string, currentMessages: Message[]) => {
-      if (!profile) return;
+      if (!profileData) return;
       setIsLoading(true);
       setStreamingText('');
 
@@ -52,12 +106,24 @@ export function NumerologyChat() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            name: profile.name,
-            birthday: profile.birthday,
+            name: profileData.name,
+            birthday: profileData.birthday,
             messages: newMessages,
+            wallet: address,
+            tier: isAdvancedUnlocked ? 'advanced' : 'free',
           }),
           signal: abortRef.current.signal,
         });
+
+        if (response.status === 402) {
+          const data = await response.json() as { error?: string };
+          if (data.error === 'credits_depleted') {
+            void refetchCredits();
+            setIsLoading(false);
+            setStreamingText('');
+            return;
+          }
+        }
 
         if (!response.ok || !response.body) {
           throw new Error('Network error');
@@ -96,34 +162,41 @@ export function NumerologyChat() {
           { role: 'assistant', content: fullText },
         ]);
         setStreamingText('');
+        // Refresh credit count after each message
+        void refetchCredits();
+        void queryClient.invalidateQueries({ queryKey: ['credits', address] });
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
         setMessages(prev => [
           ...prev,
-          {
-            role: 'assistant',
-            content: 'Sorry, something went wrong. Please try again.',
-          },
+          { role: 'assistant', content: 'Sorry, something went wrong. Please try again.' },
         ]);
         setStreamingText('');
       } finally {
         setIsLoading(false);
       }
     },
-    [profile]
+    [profileData, address, isAdvancedUnlocked, refetchCredits, queryClient]
   );
 
   const handleStart = useCallback(
-    async (e: React.FormEvent) => {
+    (e: React.FormEvent) => {
       e.preventDefault();
       if (!formData.name.trim() || !formData.birthday) return;
-      const newProfile = { name: formData.name.trim(), birthday: formData.birthday };
-      setProfile(newProfile);
+      setProfileData({ name: formData.name.trim(), birthday: formData.birthday });
       setMessages([]);
-      await sendMessage(INITIAL_PROMPT(newProfile.name), []);
+      setPhase('profile');
     },
-    [formData, sendMessage]
+    [formData]
   );
+
+  const handleStartChat = useCallback(() => {
+    setPhase('chat');
+    // Trigger initial reading on first chat entry
+    if (profileData && messages.length === 0) {
+      void sendMessage(INITIAL_PROMPT, []);
+    }
+  }, [profileData, messages.length, sendMessage]);
 
   const handleSend = useCallback(
     async (e: React.FormEvent) => {
@@ -136,60 +209,131 @@ export function NumerologyChat() {
     [input, isLoading, messages, sendMessage]
   );
 
-  const computed = profile ? computeNumerologyProfile(profile.name, profile.birthday) : null;
+  const handleReset = useCallback(() => {
+    abortRef.current?.abort();
+    setProfileData(null);
+    setMessages([]);
+    setStreamingText('');
+    setInput('');
+    setPhase('entry');
+    setFormData({ name: '', birthday: '' });
+    try {
+      localStorage.removeItem(`numerology_session_${address ?? 'guest'}`);
+    } catch { /* ignore */ }
+  }, [address]);
 
-  if (!profile) {
+  const computed = profileData
+    ? isAdvancedUnlocked
+      ? computeAdvancedProfile(profileData.name, profileData.birthday)
+      : computeNumerologyProfile(profileData.name, profileData.birthday)
+    : null;
+
+  const creditsLeft = credits?.chatMessages ?? null;
+  const creditsDepletedState = creditsLeft === 0;
+
+  // ── Entry form ──────────────────────────────────────────────────────────────
+  if (phase === 'entry') {
     return (
       <div className="numerology-chat">
         <div className="nc-entry-scroll">
-        <div className="nc-hero">
-          <div className="nc-hero-icon">🔢</div>
-          <h1 className="nc-hero-title">Numerology Reading</h1>
-          <p className="nc-hero-subtitle">
-            Discover your life path through the science of numbers — based on{' '}
-            <em>The Complete Book of Numerology</em> by David A. Phillips
-          </p>
-        </div>
-
-        <form className="nc-form" onSubmit={handleStart}>
-          <div className="nc-field">
-            <label className="nc-label" htmlFor="nc-name">
-              Full Name (as given at birth)
-            </label>
-            <input
-              id="nc-name"
-              className="nc-input"
-              type="text"
-              placeholder="e.g. John David Smith"
-              value={formData.name}
-              onChange={e => setFormData(p => ({ ...p, name: e.target.value }))}
-              required
-            />
+          <div className="nc-hero">
+            <div className="nc-hero-icon">🔢</div>
+            <h1 className="nc-hero-title">Numerology Reading</h1>
+            <p className="nc-hero-subtitle">
+              Discover your life path through the science of numbers — based on{' '}
+              <em>The Complete Book of Numerology</em> by David A. Phillips
+            </p>
           </div>
 
-          <div className="nc-field">
-            <label className="nc-label" htmlFor="nc-birthday">
-              Date of Birth
-            </label>
-            <input
-              id="nc-birthday"
-              className="nc-input"
-              type="date"
-              value={formData.birthday}
-              onChange={e => setFormData(p => ({ ...p, birthday: e.target.value }))}
-              required
-            />
-          </div>
+          <form className="nc-form" onSubmit={handleStart}>
+            <div className="nc-field">
+              <label className="nc-label" htmlFor="nc-name">
+                Full Name (as given at birth)
+              </label>
+              <input
+                id="nc-name"
+                className="nc-input"
+                type="text"
+                placeholder="e.g. John David Smith"
+                value={formData.name}
+                onChange={e => setFormData(p => ({ ...p, name: e.target.value }))}
+                required
+              />
+            </div>
 
-          <button className="nc-submit" type="submit">
-            Reveal My Numbers ✨
-          </button>
-        </form>
+            <div className="nc-field">
+              <label className="nc-label" htmlFor="nc-birthday">
+                Date of Birth
+              </label>
+              <input
+                id="nc-birthday"
+                className="nc-input"
+                type="date"
+                value={formData.birthday}
+                onChange={e => setFormData(p => ({ ...p, birthday: e.target.value }))}
+                required
+              />
+            </div>
+
+            <button className="nc-submit" type="submit">
+              Reveal My Numbers ✨
+            </button>
+          </form>
         </div>
       </div>
     );
   }
 
+  // ── Profile card ────────────────────────────────────────────────────────────
+  if (phase === 'profile' && computed) {
+    return (
+      <div className="numerology-chat">
+        <div className="nc-phase-header">
+          <button className="nc-reset-btn" onClick={handleReset}>← New Reading</button>
+          {credits && (
+            <span className="nc-credits-badge">
+              {creditsLeft} msg{creditsLeft !== 1 ? 's' : ''} left
+            </span>
+          )}
+        </div>
+        <div className="nc-scrollable">
+          <NumerologyProfile
+            profile={computed}
+            walletAddress={address}
+            onStartChat={handleStartChat}
+            onUnlockAdvanced={() => {
+              if (isAdvancedUnlocked) {
+                setPhase('advanced');
+              } else {
+                advancedUnlock.initiate();
+              }
+            }}
+            isAdvancedUnlocked={isAdvancedUnlocked}
+          />
+          {/* Show advanced content inline if already unlocked */}
+          {isAdvancedUnlocked && 'personalYear' in computed && (
+            <div className="nc-advanced-inline">
+              <NumerologyAdvanced
+                profile={computed as ReturnType<typeof computeAdvancedProfile>}
+                unlockState={advancedUnlock}
+                walletAddress={address}
+              />
+            </div>
+          )}
+          {/* Show paywall gate if not unlocked */}
+          {!isAdvancedUnlocked && (
+            <NumerologyAdvanced
+              profile={computeAdvancedProfile(computed.name, computed.birthday)}
+              unlockState={advancedUnlock}
+              walletAddress={address}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Chat ────────────────────────────────────────────────────────────────────
   return (
     <div className="numerology-chat">
       <div className="nc-profile-bar">
@@ -204,18 +348,22 @@ export function NumerologyChat() {
             <strong>{formatRulingNumber(computed?.soulUrgeNumber ?? '')}</strong>
           </span>
         </div>
-        <button
-          className="nc-reset-btn"
-          onClick={() => {
-            abortRef.current?.abort();
-            setProfile(null);
-            setMessages([]);
-            setStreamingText('');
-            setInput('');
-          }}
-        >
-          ← New Reading
-        </button>
+        <div className="nc-bar-right">
+          {credits && (
+            <span className="nc-credits-badge">
+              {creditsLeft} msg{creditsLeft !== 1 ? 's' : ''} left
+            </span>
+          )}
+          <button className="nc-tab-btn" onClick={() => setPhase('profile')}>
+            Profile
+          </button>
+          <button
+            className="nc-reset-btn"
+            onClick={handleReset}
+          >
+            ← New
+          </button>
+        </div>
       </div>
 
       <div className="nc-messages">
@@ -249,6 +397,31 @@ export function NumerologyChat() {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Credits depleted banner */}
+      {creditsDepletedState && !isLoading && (
+        <div className="nc-credits-depleted">
+          <span>No messages left today.</span>
+          {address && (
+            <button
+              className="nc-buy-btn"
+              onClick={buyCredits.initiate}
+              disabled={buyCredits.isPaying || buyCredits.isConfirming || buyCredits.isVerifying}
+            >
+              {buyCredits.isPaying
+                ? 'Confirm...'
+                : buyCredits.isConfirming
+                  ? 'Confirming...'
+                  : buyCredits.isVerifying
+                    ? 'Verifying...'
+                    : 'Buy 20 msgs for $0.20 USDC'}
+            </button>
+          )}
+          {buyCredits.error && (
+            <span className="nc-buy-error">{buyCredits.error}</span>
+          )}
+        </div>
+      )}
+
       <form className="nc-input-row" onSubmit={handleSend}>
         <input
           className="nc-chat-input"
@@ -256,12 +429,12 @@ export function NumerologyChat() {
           placeholder="Ask about your numbers, relationships, life path…"
           value={input}
           onChange={e => setInput(e.target.value)}
-          disabled={isLoading}
+          disabled={isLoading || creditsDepletedState}
         />
         <button
           className="nc-send-btn"
           type="submit"
-          disabled={isLoading || !input.trim()}
+          disabled={isLoading || !input.trim() || creditsDepletedState}
         >
           Send
         </button>
@@ -271,7 +444,6 @@ export function NumerologyChat() {
 }
 
 function MessageContent({ content }: { content: string }) {
-  // Simple markdown-like rendering: bold, headings, lists
   const lines = content.split('\n');
   const elements: React.ReactNode[] = [];
   let i = 0;

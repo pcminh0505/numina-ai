@@ -4,30 +4,96 @@ loadEnv();
 import express, { type Response } from 'express';
 import cors from 'cors';
 import Anthropic from '@anthropic-ai/sdk';
-import { computeNumerologyProfile } from '../src/lib/numerology.js';
+import { createPublicClient, http, decodeEventLog, parseAbiItem } from 'viem';
+import { celo, celoSepolia } from 'viem/chains';
+import { computeNumerologyProfile, computeAdvancedProfile } from '../src/lib/numerology.js';
 import { buildSystemPrompt } from './bookExtractor.js';
+import {
+  getCredits,
+  deductChat,
+  addChatCredits,
+  unlockAdvanced,
+  resetDailyIfNeeded,
+  applyReferral,
+} from './credits.js';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 // ── LLM backend selection ─────────────────────────────────────────────────────
-// If LLM_BASE_URL is set, route through any OpenAI-compatible endpoint (e.g. mlx_lm).
-// Otherwise fall back to the Anthropic API.
-const LLM_BASE_URL       = process.env.LLM_BASE_URL?.replace(/\/$/, '');
-const LLM_MODEL          = process.env.LLM_MODEL ?? 'default';
-const LLM_API_KEY        = process.env.LLM_API_KEY ?? 'local';
+// Priority: LLM_BASE_URL (local/custom) > OPENROUTER_API_KEY > ANTHROPIC_API_KEY
+const LLM_BASE_URL        = process.env.LLM_BASE_URL?.replace(/\/$/, '');
+const LLM_MODEL           = process.env.LLM_MODEL ?? 'meta-llama/llama-3.3-70b-instruct:free';
+const LLM_MODEL_PAID      = process.env.LLM_MODEL_PAID ?? 'anthropic/claude-3.5-sonnet';
+const LLM_API_KEY         = process.env.LLM_API_KEY ?? 'local';
 const LLM_ENABLE_THINKING = process.env.LLM_ENABLE_THINKING !== 'false';
+const OPENROUTER_API_KEY  = process.env.OPENROUTER_API_KEY;
+const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
-const anthropic = LLM_BASE_URL
+const anthropic = (LLM_BASE_URL || OPENROUTER_API_KEY)
   ? null
   : new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+const effectiveBaseUrl = LLM_BASE_URL ?? (OPENROUTER_API_KEY ? OPENROUTER_BASE_URL : null);
+
 console.log(
-  LLM_BASE_URL
-    ? `LLM backend: local OpenAI-compatible → ${LLM_BASE_URL}  model=${LLM_MODEL}`
-    : 'LLM backend: Anthropic API'
+  effectiveBaseUrl
+    ? `LLM backend: ${LLM_BASE_URL ? 'local' : 'OpenRouter'} → ${effectiveBaseUrl}  model=${LLM_MODEL}`
+    : 'LLM backend: Anthropic API',
 );
+
+// ── On-chain USDC verification ────────────────────────────────────────────────
+const USDC_ADDRESSES: Record<number, `0x${string}`> = {
+  [celo.id]:        '0xcebA9300f2b948710d2653dD7B07f33A8B32118C',
+  [celoSepolia.id]: '0x01C5C0122039549AD1493B8220cABEdD739BC44E',
+};
+const TREASURY_ADDRESS = process.env.X402_TREASURY_ADDRESS?.toLowerCase();
+const ADVANCED_PRICE   = BigInt(process.env.X402_ADVANCED_PRICE ?? '500000');
+const CREDITS_PRICE    = BigInt(process.env.X402_CREDITS_PRICE  ?? '200000');
+
+const TRANSFER_ABI = parseAbiItem(
+  'event Transfer(address indexed from, address indexed to, uint256 value)',
+);
+
+async function verifyUsdcTransfer(
+  txHash: `0x${string}`,
+  fromWallet: string,
+  minAmount: bigint,
+  chainId: number,
+): Promise<boolean> {
+  if (!TREASURY_ADDRESS) return false;
+  const chain = chainId === celo.id ? celo : celoSepolia;
+  const usdcAddress = USDC_ADDRESSES[chainId];
+  if (!usdcAddress) return false;
+
+  const client = createPublicClient({ chain, transport: http() });
+  let receipt;
+  try {
+    receipt = await client.getTransactionReceipt({ hash: txHash });
+  } catch {
+    return false;
+  }
+  if (receipt.status !== 'success') return false;
+
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== usdcAddress.toLowerCase()) continue;
+    try {
+      const decoded = decodeEventLog({ abi: [TRANSFER_ABI], data: log.data, topics: log.topics });
+      const args = decoded.args as { from: string; to: string; value: bigint };
+      if (
+        args.from?.toLowerCase() === fromWallet.toLowerCase() &&
+        args.to?.toLowerCase() === TREASURY_ADDRESS &&
+        args.value >= minAmount
+      ) {
+        return true;
+      }
+    } catch {
+      // not a matching Transfer event
+    }
+  }
+  return false;
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface ChatMessage {
@@ -35,19 +101,13 @@ interface ChatMessage {
   content: string;
 }
 
-// ── Streaming helpers ─────────────────────────────────────────────────────────
-
 // ── Thinking-token filter ─────────────────────────────────────────────────────
-// Qwen3 (and some other reasoning models) emit <think>…</think> blocks.
-// When LLM_ENABLE_THINKING=false we strip them from the stream so they never
-// reach the chat UI.  We need a stateful buffer because the open/close tags
-// can arrive split across multiple SSE chunks.
 class ThinkingFilter {
   private buf = '';
   private inside = false;
 
   feed(text: string): string {
-    if (LLM_ENABLE_THINKING) return text; // pass-through when thinking is on
+    if (LLM_ENABLE_THINKING) return text;
 
     this.buf += text;
     let out = '';
@@ -56,33 +116,28 @@ class ThinkingFilter {
       if (this.inside) {
         const close = this.buf.indexOf('</think>');
         if (close === -1) {
-          // Keep buffering — the closing tag hasn't arrived yet.
-          // Retain up to 8 chars in case the tag is split across chunks.
           if (this.buf.length > 8) this.buf = this.buf.slice(-8);
           break;
         }
         this.inside = false;
-        this.buf = this.buf.slice(close + 8); // skip past </think>
+        this.buf = this.buf.slice(close + 8);
       } else {
         const open = this.buf.indexOf('<think>');
         if (open === -1) {
-          // No opening tag anywhere — safe to emit everything except a
-          // possible partial tag at the very end.
           const safe = this.buf.length > 7 ? this.buf.length - 7 : 0;
           out += this.buf.slice(0, safe);
           this.buf = this.buf.slice(safe);
           break;
         }
-        out += this.buf.slice(0, open); // emit text before <think>
+        out += this.buf.slice(0, open);
         this.inside = true;
-        this.buf = this.buf.slice(open + 7); // skip past <think>
+        this.buf = this.buf.slice(open + 7);
       }
     }
 
     return out;
   }
 
-  /** Flush any remaining buffered text once the stream ends. */
   flush(): string {
     if (LLM_ENABLE_THINKING || this.inside) return '';
     const out = this.buf;
@@ -91,34 +146,35 @@ class ThinkingFilter {
   }
 }
 
+// ── Streaming helpers ─────────────────────────────────────────────────────────
+
 async function streamOpenAI(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
   systemPrompt: string,
   messages: ChatMessage[],
-  res: Response
+  res: Response,
+  extraHeaders: Record<string, string> = {},
 ): Promise<void> {
   const requestBody: Record<string, unknown> = {
-    model: LLM_MODEL,
+    model,
     stream: true,
     max_tokens: 2048,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      ...messages,
-    ],
+    messages: [{ role: 'system', content: systemPrompt }, ...messages],
   };
 
-  // Ask the model to skip reasoning tokens when thinking is disabled.
-  // mlx_lm honours this via chat_template_kwargs; some providers use
-  // a top-level "thinking" field — we send both for compatibility.
   if (!LLM_ENABLE_THINKING) {
     requestBody['chat_template_kwargs'] = { enable_thinking: false };
     requestBody['thinking'] = { type: 'disabled' };
   }
 
-  const upstream = await fetch(`${LLM_BASE_URL}/chat/completions`, {
+  const upstream = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${LLM_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
+      ...extraHeaders,
     },
     body: JSON.stringify(requestBody),
   });
@@ -145,7 +201,6 @@ async function streamOpenAI(
       if (!line.startsWith('data: ')) continue;
       const payload = line.slice(6).trim();
       if (payload === '[DONE]') continue;
-
       try {
         const chunk = JSON.parse(payload) as {
           choices?: Array<{ delta?: { content?: string } }>;
@@ -160,7 +215,6 @@ async function streamOpenAI(
     }
   }
 
-  // Flush any trailing text the filter was holding back
   const tail = filter.flush();
   if (tail) res.write(`data: ${JSON.stringify({ text: tail })}\n\n`);
 }
@@ -168,7 +222,7 @@ async function streamOpenAI(
 async function streamAnthropic(
   systemPrompt: string,
   messages: ChatMessage[],
-  res: Response
+  res: Response,
 ): Promise<void> {
   const stream = anthropic!.messages.stream({
     model: 'claude-sonnet-4-6',
@@ -187,13 +241,15 @@ async function streamAnthropic(
   }
 }
 
-// ── Route ─────────────────────────────────────────────────────────────────────
+// ── Routes ────────────────────────────────────────────────────────────────────
 
 app.post('/api/chat', async (req, res) => {
-  const { name, birthday, messages } = req.body as {
+  const { name, birthday, messages, wallet, tier } = req.body as {
     name: string;
     birthday: string;
     messages: ChatMessage[];
+    wallet?: string;
+    tier?: 'free' | 'advanced';
   };
 
   if (!name || !birthday || !Array.isArray(messages)) {
@@ -201,16 +257,36 @@ app.post('/api/chat', async (req, res) => {
     return;
   }
 
-  const profile = computeNumerologyProfile(name, birthday);
-  const systemPrompt = buildSystemPrompt(profile);
+  // Credit gating — only enforce when wallet is provided
+  if (wallet) {
+    resetDailyIfNeeded(wallet);
+    const ok = deductChat(wallet);
+    if (!ok) {
+      res.status(402).json({ error: 'credits_depleted' });
+      return;
+    }
+  }
+
+  const effectiveTier = tier ?? 'free';
+  const profile = effectiveTier === 'advanced'
+    ? computeAdvancedProfile(name, birthday)
+    : computeNumerologyProfile(name, birthday);
+
+  const systemPrompt = buildSystemPrompt(profile, effectiveTier);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
   try {
-    if (LLM_BASE_URL) {
-      await streamOpenAI(systemPrompt, messages, res);
+    if (effectiveBaseUrl) {
+      const isOpenRouter = !LLM_BASE_URL && !!OPENROUTER_API_KEY;
+      const apiKey = LLM_BASE_URL ? LLM_API_KEY : (OPENROUTER_API_KEY ?? 'local');
+      const model  = effectiveTier === 'advanced' && isOpenRouter ? LLM_MODEL_PAID : LLM_MODEL;
+      const extraHeaders = isOpenRouter
+        ? { 'X-Title': 'MiniPay Numerology', 'HTTP-Referer': 'https://minipay.to' }
+        : {};
+      await streamOpenAI(effectiveBaseUrl, apiKey, model, systemPrompt, messages, res, extraHeaders);
     } else {
       await streamAnthropic(systemPrompt, messages, res);
     }
@@ -223,12 +299,76 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+app.get('/api/credits', (req, res) => {
+  const wallet = req.query.wallet as string | undefined;
+  if (!wallet) {
+    res.status(400).json({ error: 'wallet is required' });
+    return;
+  }
+  res.json(getCredits(wallet));
+});
+
+app.post('/api/unlock-advanced', async (req, res) => {
+  const { wallet, txHash, chainId } = req.body as {
+    wallet: string;
+    txHash: `0x${string}`;
+    chainId?: number;
+  };
+  if (!wallet || !txHash) {
+    res.status(400).json({ error: 'wallet and txHash are required' });
+    return;
+  }
+  const chain = chainId ?? celo.id;
+  const valid = await verifyUsdcTransfer(txHash, wallet, ADVANCED_PRICE, chain);
+  if (!valid) {
+    res.status(402).json({ error: 'Payment not verified' });
+    return;
+  }
+  unlockAdvanced(wallet);
+  res.json({ ok: true });
+});
+
+app.post('/api/buy-credits', async (req, res) => {
+  const { wallet, txHash, chainId } = req.body as {
+    wallet: string;
+    txHash: `0x${string}`;
+    chainId?: number;
+  };
+  if (!wallet || !txHash) {
+    res.status(400).json({ error: 'wallet and txHash are required' });
+    return;
+  }
+  const chain = chainId ?? celo.id;
+  const valid = await verifyUsdcTransfer(txHash, wallet, CREDITS_PRICE, chain);
+  if (!valid) {
+    res.status(402).json({ error: 'Payment not verified' });
+    return;
+  }
+  addChatCredits(wallet, 20);
+  res.json({ ok: true, creditsAdded: 20 });
+});
+
+app.post('/api/referral/register', (req, res) => {
+  const { newWallet, referrerCode } = req.body as {
+    newWallet: string;
+    referrerCode: string;
+  };
+  if (!newWallet || !referrerCode) {
+    res.status(400).json({ error: 'newWallet and referrerCode are required' });
+    return;
+  }
+  const awarded = applyReferral(newWallet, referrerCode);
+  res.json({ ok: true, awarded });
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({
     ok: true,
-    backend: LLM_BASE_URL ? 'local' : 'anthropic',
-    model: LLM_BASE_URL ? LLM_MODEL : 'claude-sonnet-4-6',
+    backend: effectiveBaseUrl ? (LLM_BASE_URL ? 'local' : 'openrouter') : 'anthropic',
+    model: LLM_MODEL,
+    modelPaid: LLM_MODEL_PAID,
     thinking: LLM_ENABLE_THINKING,
+    selfAgentId: process.env.SELF_AGENT_ID ?? null,
   });
 });
 
