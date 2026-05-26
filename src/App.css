@@ -41,6 +41,17 @@
   gap: 8px;
 }
 
+.usdc-badge {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  border-radius: 20px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  letter-spacing: 0.01em;
+}
+
 /* ---- Network switcher ---- */
 .network-switcher {
   position: relative;

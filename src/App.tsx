@@ -1,20 +1,37 @@
 import "./App.css";
 import { Component, type ReactNode } from "react";
-import { useConnection, WagmiProvider } from "wagmi";
+import { useConnection, useChainId, useReadContract, WagmiProvider } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { erc20Abi, formatUnits } from "viem";
+import { celo, celoSepolia } from "wagmi/chains";
 import { config } from "./lib/wagmi";
 import { useAutoConnect } from "./hooks/useAutoConnect";
-import { isMiniPayEnvironment } from "./lib/minipay";
-import { WalletInfo } from "./components/WalletInfo";
-import { BalanceDisplay } from "./components/BalanceDisplay";
-import { CounterContract } from "./components/CounterContract";
-import { SendToken } from "./components/SendToken";
-import { MiniPayMethods } from "./components/MiniPayMethods";
-import { NetworkSwitcher } from "./components/NetworkSwitcher";
+import { useReferral } from "./hooks/useReferral";
+import { NumerologyChat } from "./components/NumerologyChat";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000 } },
 });
+
+const USDC_ADDRESS: Partial<Record<number, `0x${string}`>> = {
+  [celo.id]:        "0xcebA9300f2b948710d2653dD7B07f33A8B32118C",
+  [celoSepolia.id]: "0x01C5C0122039549AD1493B8220cABEdD739BC44E",
+};
+
+function UsdcBadge({ address }: { address?: `0x${string}` }) {
+  const chainId = useChainId();
+  const usdcAddr = USDC_ADDRESS[chainId];
+  const { data } = useReadContract({
+    address: usdcAddr,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: address ? [address] : undefined,
+    query: { enabled: !!address && !!usdcAddr, refetchInterval: 30_000 },
+  });
+  if (!address || data === undefined) return null;
+  const formatted = parseFloat(formatUnits(data, 6)).toFixed(2);
+  return <span className="usdc-badge">${formatted}</span>;
+}
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -38,39 +55,22 @@ class ErrorBoundary extends Component<
 
 function AppContent() {
   useAutoConnect();
-  const { isConnected, isConnecting } = useConnection();
+  const { address, isConnected, isConnecting } = useConnection();
+  useReferral(address);
 
   return (
     <div className="app">
       <header className="app-header">
-        <span className="app-title">MiniPay Starter</span>
+        <span className="app-title">Numina AI</span>
         <div className="header-right">
-          <NetworkSwitcher />
+          <UsdcBadge address={address} />
           <span
             className={`status-dot ${isConnected ? "connected" : isConnecting ? "connecting" : ""}`}
-            title={
-              isConnected
-                ? "Connected"
-                : isConnecting
-                  ? "Connecting..."
-                  : "Disconnected"
-            }
+            title={isConnected ? "Connected" : isConnecting ? "Connecting…" : "Disconnected"}
           />
         </div>
       </header>
-      <main className="app-main">
-        {!isMiniPayEnvironment() && (
-          <div className="minipay-warning">
-            Not running inside MiniPay. Open this app in MiniPay to access all
-            features. Some APIs (QR scan, exchange rate) will not work here.
-          </div>
-        )}
-        <WalletInfo />
-        <BalanceDisplay />
-        <CounterContract />
-        <SendToken />
-        <MiniPayMethods />
-      </main>
+      <NumerologyChat />
     </div>
   );
 }
