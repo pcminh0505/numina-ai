@@ -36,9 +36,10 @@ contract NumerologyReadingTest is Test {
     NumerologyReading public reading;
     MockUSDC          public usdc;
 
-    address public treasury = address(0xFee);
-    address public alice    = address(0xA11ce);
-    address public bob      = address(0xB0b);
+    address public treasury     = address(0xFee);
+    address public alice        = address(0xA11ce);
+    address public bob          = address(0xB0b);
+    address public serverOwner  = address(0x5afe);   // simulates the API server wallet
 
     uint256 constant ADVANCED_PRICE = 500_000; // $0.50 USDC (6 dec)
     uint256 constant CREDITS_PRICE  = 200_000; // $0.20 USDC (6 dec)
@@ -46,7 +47,7 @@ contract NumerologyReadingTest is Test {
     function setUp() public {
         usdc    = new MockUSDC();
         reading = new NumerologyReading(
-            address(usdc), treasury, ADVANCED_PRICE, CREDITS_PRICE
+            address(usdc), treasury, ADVANCED_PRICE, CREDITS_PRICE, serverOwner
         );
         usdc.mint(alice, 10_000_000);
         usdc.mint(bob,   10_000_000);
@@ -160,6 +161,56 @@ contract NumerologyReadingTest is Test {
 
         assertFalse(reading.hasAdvanced(bob));
         assertEq(reading.creditsPurchased(bob), 0);
+    }
+
+    // ── recordAdvancedUnlock (server-gated) ─────────────────────────────────
+
+    function test_recordAdvancedUnlock_happy() public {
+        vm.prank(serverOwner);
+        reading.recordAdvancedUnlock(alice);
+        assertTrue(reading.hasAdvanced(alice));
+    }
+
+    function test_recordAdvancedUnlock_revert_unauthorized() public {
+        vm.prank(alice);
+        vm.expectRevert(NumerologyReading.Unauthorized.selector);
+        reading.recordAdvancedUnlock(alice);
+    }
+
+    function test_recordAdvancedUnlock_revert_double() public {
+        vm.prank(serverOwner);
+        reading.recordAdvancedUnlock(alice);
+        vm.prank(serverOwner);
+        vm.expectRevert(NumerologyReading.AlreadyUnlocked.selector);
+        reading.recordAdvancedUnlock(alice);
+    }
+
+    // ── recordCreditsPurchase (server-gated) ─────────────────────────────────
+
+    function test_recordCreditsPurchase_happy() public {
+        vm.prank(serverOwner);
+        reading.recordCreditsPurchase(alice, 1);
+        assertEq(reading.creditsPurchased(alice), 20);
+    }
+
+    function test_recordCreditsPurchase_accumulates() public {
+        vm.prank(serverOwner);
+        reading.recordCreditsPurchase(alice, 2);
+        vm.prank(serverOwner);
+        reading.recordCreditsPurchase(alice, 1);
+        assertEq(reading.creditsPurchased(alice), 60);
+    }
+
+    function test_recordCreditsPurchase_revert_unauthorized() public {
+        vm.prank(alice);
+        vm.expectRevert(NumerologyReading.Unauthorized.selector);
+        reading.recordCreditsPurchase(alice, 1);
+    }
+
+    function test_recordCreditsPurchase_revert_zero_packs() public {
+        vm.prank(serverOwner);
+        vm.expectRevert(NumerologyReading.InvalidPacks.selector);
+        reading.recordCreditsPurchase(alice, 0);
     }
 
     // ── events ──────────────────────────────────────────────────────────────

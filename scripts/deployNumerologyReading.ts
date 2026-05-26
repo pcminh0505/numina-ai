@@ -16,6 +16,7 @@
 
 import { execSync } from 'child_process';
 import { config as loadEnv } from 'dotenv';
+import { privateKeyToAccount } from 'viem/accounts';
 loadEnv();
 
 const PRIVATE_KEY      = process.env.REGISTER_PRIVATE_KEY;
@@ -38,6 +39,9 @@ const RPC: Record<string, string> = {
 if (!PRIVATE_KEY) { console.error('REGISTER_PRIVATE_KEY missing in .env'); process.exit(1); }
 if (!TREASURY)    { console.error('X402_TREASURY_ADDRESS missing in .env'); process.exit(1); }
 
+// Owner = API server wallet (derived from private key so it can call record functions)
+const OWNER_ADDRESS = privateKeyToAccount(PRIVATE_KEY as `0x${string}`).address;
+
 const net     = USE_MAINNET ? 'mainnet' : 'testnet';
 const rpc     = RPC[net];
 const usdc    = USDC[net];
@@ -47,25 +51,33 @@ console.log(`\nDeploying NumerologyReading to Celo ${net}...`);
 console.log(`  RPC      : ${rpc}`);
 console.log(`  USDC     : ${usdc}`);
 console.log(`  Treasury : ${TREASURY}`);
+console.log(`  Owner    : ${OWNER_ADDRESS}`);
 console.log(`  Advanced : ${ADVANCED_PRICE} (${Number(ADVANCED_PRICE) / 1e6} USDC)`);
 console.log(`  Credits  : ${CREDITS_PRICE} (${Number(CREDITS_PRICE) / 1e6} USDC/pack)\n`);
 
-const constructorArgs = `${usdc} ${TREASURY} ${ADVANCED_PRICE} ${CREDITS_PRICE}`;
-
+// Use forge script (non-interactive) instead of forge create (requires confirmation in Foundry 1.5+)
 const cmd = [
-  'forge create contracts/NumerologyReading.sol:NumerologyReading',
+  'forge script scripts/DeployNumerologyReading.s.sol:DeployNumerologyReading',
   `--rpc-url ${rpc}`,
   `--private-key ${PRIVATE_KEY}`,
-  `--constructor-args ${constructorArgs}`,
   '--broadcast',
+  '--legacy',
 ].join(' ');
 
+const env = {
+  ...process.env,
+  DEPLOY_USDC:           usdc,
+  X402_TREASURY_ADDRESS: TREASURY,
+  X402_ADVANCED_PRICE:   ADVANCED_PRICE,
+  X402_CREDITS_PRICE:    CREDITS_PRICE,
+};
+
 try {
-  const output = execSync(cmd, { encoding: 'utf-8' });
+  const output = execSync(cmd, { encoding: 'utf-8', env });
+  console.log(output);
+
   const match  = output.match(/Deployed to: (0x[0-9a-fA-F]{40})/);
   const address = match?.[1];
-
-  console.log(output);
 
   if (address) {
     console.log('\n✓ Contract deployed!');

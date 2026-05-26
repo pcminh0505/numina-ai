@@ -11,10 +11,13 @@ contract DeployNumerologyReading is Script {
         uint256 advanced = vm.envUint("X402_ADVANCED_PRICE");
         uint256 credits  = vm.envUint("X402_CREDITS_PRICE");
 
+        // owner = the API server wallet (same private key used to broadcast)
         vm.startBroadcast();
-        NumerologyReading reading = new NumerologyReading(usdc, treasury, advanced, credits);
+        address owner = msg.sender;
+        NumerologyReading reading = new NumerologyReading(usdc, treasury, advanced, credits, owner);
         vm.stopBroadcast();
 
         console.log("Deployed to:", address(reading));
+        console.log("Owner (server wallet):", owner);
     }
 }

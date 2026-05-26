@@ -10,9 +10,17 @@ interface IERC20 {
 /// @notice On-chain payment gateway for MiniPay Numerology on Celo.
 ///         Stores advanced-reading unlock state and total chat-credits purchased
 ///         so they persist independently of the off-chain server.
+///
+///         Payment flow (MiniPay-compatible):
+///           1. Client sends USDC directly to treasury via ERC-20 transfer()
+///              — MiniPay can decode and display this as "$0.50 USDC"
+///           2. Client posts txHash to the API server
+///           3. Server verifies the Transfer event, then calls recordAdvancedUnlock()
+///              or recordCreditsPurchase() using its owner key — writing state on-chain
 contract NumerologyReading {
     IERC20  public immutable usdc;
     address public immutable treasury;
+    address public immutable owner;            // API server wallet — can call record functions
     uint256 public immutable advancedPrice;    // USDC 6-decimal units (e.g. 500000 = $0.50)
     uint256 public immutable creditsPrice;     // USDC 6-decimal units per pack (e.g. 200000 = $0.20)
     uint256 public constant  CREDITS_PER_PACK = 20;
@@ -30,18 +38,45 @@ contract NumerologyReading {
     error AlreadyUnlocked();
     error InvalidPacks();
     error TransferFailed();
+    error Unauthorized();
 
     constructor(
         address _usdc,
         address _treasury,
         uint256 _advancedPrice,
-        uint256 _creditsPrice
+        uint256 _creditsPrice,
+        address _owner
     ) {
         usdc          = IERC20(_usdc);
         treasury      = _treasury;
         advancedPrice = _advancedPrice;
         creditsPrice  = _creditsPrice;
+        owner         = _owner;
     }
+
+    // ── Server-recorded paths (MiniPay-compatible) ───────────────────────────
+    // The client pays via direct ERC-20 transfer() to the treasury.
+    // The server verifies the Transfer event then calls these to write state on-chain.
+
+    /// @notice Mark a user as having unlocked advanced insights.
+    ///         Called by the server after verifying the USDC Transfer event.
+    function recordAdvancedUnlock(address user) external {
+        if (msg.sender != owner) revert Unauthorized();
+        if (hasAdvanced[user]) revert AlreadyUnlocked();
+        hasAdvanced[user] = true;
+        emit AdvancedUnlocked(user);
+    }
+
+    /// @notice Record credit packs purchased by a user.
+    ///         Called by the server after verifying the USDC Transfer event.
+    function recordCreditsPurchase(address user, uint256 packs) external {
+        if (msg.sender != owner) revert Unauthorized();
+        if (packs == 0 || packs > 10) revert InvalidPacks();
+        creditsPurchased[user] += CREDITS_PER_PACK * packs;
+        emit CreditsPurchased(user, CREDITS_PER_PACK * packs);
+    }
+
+    // ── Legacy paths (approve+transferFrom, kept for non-MiniPay clients) ────
 
     /// @notice Pay advancedPrice USDC to permanently unlock the advanced numerology reading.
     function unlockAdvanced() external {
@@ -52,7 +87,6 @@ contract NumerologyReading {
     }
 
     /// @notice Buy `packs` × CREDITS_PER_PACK chat credits for `packs × creditsPrice` USDC.
-    /// @param packs Number of credit packs (1–10).
     function buyCredits(uint256 packs) external {
         if (packs == 0 || packs > 10) revert InvalidPacks();
         if (!usdc.transferFrom(msg.sender, treasury, creditsPrice * packs)) revert TransferFailed();

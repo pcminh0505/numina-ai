@@ -4,7 +4,8 @@ loadEnv();
 import express, { type Response } from 'express';
 import cors from 'cors';
 import Anthropic from '@anthropic-ai/sdk';
-import { createPublicClient, http, decodeEventLog, parseAbiItem, parseAbi } from 'viem';
+import { createPublicClient, createWalletClient, http, decodeEventLog, parseAbiItem, parseAbi } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { celo, celoSepolia } from 'viem/chains';
 import { computeNumerologyProfile, computeAdvancedProfile } from '../src/lib/numerology.js';
 import { buildSystemPrompt } from './bookExtractor.js';
@@ -62,12 +63,48 @@ const TRANSFER_ABI = parseAbiItem(
 const READING_CONTRACT_ABI = parseAbi([
   'function hasAdvanced(address user) view returns (bool)',
   'function creditsPurchased(address user) view returns (uint256)',
+  'function recordAdvancedUnlock(address user)',
+  'function recordCreditsPurchase(address user, uint256 packs)',
 ]);
 
 const READING_CONTRACT: Partial<Record<number, `0x${string}`>> = {
   [celo.id]:        (process.env.READING_CONTRACT_MAINNET ?? '') as `0x${string}`,
   [celoSepolia.id]: (process.env.READING_CONTRACT_TESTNET ?? '') as `0x${string}`,
 };
+
+// Server wallet for calling owner-gated record functions
+const SERVER_PRIVATE_KEY = process.env.REGISTER_PRIVATE_KEY as `0x${string}` | undefined;
+
+async function recordOnChain(
+  fn: 'recordAdvancedUnlock' | 'recordCreditsPurchase',
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  args: any[],
+  chainId: number,
+): Promise<void> {
+  if (!SERVER_PRIVATE_KEY) {
+    console.warn(`recordOnChain: REGISTER_PRIVATE_KEY not set — skipping on-chain record of ${fn}`);
+    return;
+  }
+  const contractAddress = READING_CONTRACT[chainId];
+  if (!contractAddress || contractAddress.length < 10) return;
+
+  const chain = chainId === celo.id ? celo : celoSepolia;
+  const account = privateKeyToAccount(SERVER_PRIVATE_KEY);
+  const walletClient = createWalletClient({ account, chain, transport: http() });
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const hash = await (walletClient.writeContract as (args: any) => Promise<`0x${string}`>)({
+      address: contractAddress,
+      abi: READING_CONTRACT_ABI,
+      functionName: fn,
+      args,
+    });
+    console.log(`${fn} recorded on-chain: ${hash}`);
+  } catch (err) {
+    console.error(`Failed to record ${fn} on-chain:`, err);
+  }
+}
 
 async function getOnChainState(
   wallet: string,
@@ -336,7 +373,7 @@ app.post('/api/chat', async (req, res) => {
       const isOpenRouter = !LLM_BASE_URL && !!OPENROUTER_API_KEY;
       const apiKey = LLM_BASE_URL ? LLM_API_KEY : (OPENROUTER_API_KEY ?? 'local');
       const model  = effectiveTier === 'advanced' && isOpenRouter ? LLM_MODEL_PAID : LLM_MODEL;
-      const extraHeaders = isOpenRouter
+      const extraHeaders: Record<string, string> = isOpenRouter
         ? { 'X-Title': 'Numina AI', 'HTTP-Referer': 'https://minipay.to' }
         : {};
       await streamOpenAI(effectiveBaseUrl, apiKey, model, systemPrompt, messages, res, extraHeaders);
@@ -391,6 +428,8 @@ app.post('/api/unlock-advanced', async (req, res) => {
     return;
   }
   unlockAdvanced(wallet);
+  // Fire-and-forget: write state on-chain via server wallet
+  void recordOnChain('recordAdvancedUnlock', [wallet as `0x${string}`], chain);
   res.json({ ok: true });
 });
 
@@ -411,6 +450,8 @@ app.post('/api/buy-credits', async (req, res) => {
     return;
   }
   addChatCredits(wallet, 20);
+  // Fire-and-forget: write state on-chain via server wallet (1 pack = 20 credits)
+  void recordOnChain('recordCreditsPurchase', [wallet as `0x${string}`, 1n], chain);
   res.json({ ok: true, creditsAdded: 20 });
 });
 
