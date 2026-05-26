@@ -1,10 +1,11 @@
 import { useState, useCallback } from 'react';
 import { useChainId, usePublicClient, useWalletClient } from 'wagmi';
-import { erc20Abi } from 'viem';
+import { erc20Abi, encodeFunctionData } from 'viem';
 import { useQueryClient } from '@tanstack/react-query';
 import { USDC_ADDRESSES, CREDITS_PRICE } from '../lib/x402';
 import { getFeeCurrencyAddress } from '../lib/feeCurrency';
-import { READING_CONTRACT_ABI, getReadingContractAddress } from '../lib/readingContract';
+
+const TREASURY = import.meta.env.VITE_X402_TREASURY_ADDRESS as `0x${string}` | undefined;
 
 export function useBuyCredits(wallet: string | undefined) {
   const chainId      = useChainId();
@@ -12,73 +13,67 @@ export function useBuyCredits(wallet: string | undefined) {
   const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient();
 
-  const contractAddress = getReadingContractAddress(chainId);
-
-  const [isPaying,    setIsPaying]    = useState(false);
-  const [didPurchase, setDidPurchase] = useState(false);
-  const [error,       setError]       = useState<string | null>(null);
+  const [isPaying,     setIsPaying]     = useState(false);
+  const [isConfirming, setIsConfirming] = useState(false);
+  const [isVerifying,  setIsVerifying]  = useState(false);
+  const [error,        setError]        = useState<string | null>(null);
 
   const initiate = useCallback(async () => {
-    if (!wallet || !walletClient || !publicClient) return;
-    if (!contractAddress) {
-      setError('Contract not deployed — add VITE_READING_CONTRACT_TESTNET to .env after deploying');
-      return;
-    }
+    if (!wallet || !walletClient || !publicClient || !TREASURY) return;
     const usdcAddress = USDC_ADDRESSES[chainId];
     if (!usdcAddress) { setError('USDC not available on this chain'); return; }
 
     setIsPaying(true);
-    setDidPurchase(false);
+    setIsConfirming(false);
+    setIsVerifying(false);
     setError(null);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const write = walletClient.writeContract as (args: any) => Promise<`0x${string}`>;
-    const feeCurrency = getFeeCurrencyAddress('USDC', chainId);
-
     try {
-      // 1. Approve (1 pack worth of USDC)
-      const allowance = await publicClient.readContract({
-        address: usdcAddress,
+      // Direct ERC-20 transfer to treasury — MiniPay shows "$0.20 USDC" clearly
+      const data = encodeFunctionData({
         abi: erc20Abi,
-        functionName: 'allowance',
-        args: [wallet as `0x${string}`, contractAddress],
-      }) as bigint;
+        functionName: 'transfer',
+        args: [TREASURY, CREDITS_PRICE],
+      });
+      const feeCurrency = getFeeCurrencyAddress('USDC', chainId);
 
-      if (allowance < CREDITS_PRICE) {
-        const approveHash = await write({
-          address: usdcAddress,
-          abi: erc20Abi,
-          functionName: 'approve',
-          args: [contractAddress, CREDITS_PRICE],
-          feeCurrency,
-        });
-        await publicClient.waitForTransactionReceipt({ hash: approveHash });
-      }
-
-      // 2. Buy 1 pack (20 credits)
-      const buyHash = await write({
-        address: contractAddress,
-        abi: READING_CONTRACT_ABI,
-        functionName: 'buyCredits',
-        args: [1n],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txHash = await (walletClient.sendTransaction as (args: any) => Promise<`0x${string}`>)({
+        to: usdcAddress,
+        data,
         feeCurrency,
       });
-      await publicClient.waitForTransactionReceipt({ hash: buyHash });
 
-      setDidPurchase(true);
+      setIsPaying(false);
+      setIsConfirming(true);
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+      setIsConfirming(false);
+      setIsVerifying(true);
+      const resp = await fetch('/api/buy-credits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wallet, txHash, chainId }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? 'Payment verification failed');
+      }
+
       void queryClient.invalidateQueries({ queryKey: ['credits', wallet] });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Transaction failed');
     } finally {
       setIsPaying(false);
+      setIsConfirming(false);
+      setIsVerifying(false);
     }
-  }, [wallet, walletClient, publicClient, contractAddress, chainId, queryClient]);
+  }, [wallet, walletClient, publicClient, chainId, queryClient]);
 
   return {
-    didPurchase,
     isPaying,
-    isConfirming: false,
-    isVerifying: false,
+    isConfirming,
+    isVerifying,
     initiate,
     error,
   };

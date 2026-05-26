@@ -1,10 +1,12 @@
 import { useState, useCallback } from 'react';
 import { useChainId, usePublicClient, useReadContract, useWalletClient } from 'wagmi';
-import { erc20Abi } from 'viem';
+import { erc20Abi, encodeFunctionData } from 'viem';
 import { useQueryClient } from '@tanstack/react-query';
 import { USDC_ADDRESSES, ADVANCED_PRICE } from '../lib/x402';
 import { getFeeCurrencyAddress } from '../lib/feeCurrency';
 import { READING_CONTRACT_ABI, getReadingContractAddress } from '../lib/readingContract';
+
+const TREASURY = import.meta.env.VITE_X402_TREASURY_ADDRESS as `0x${string}` | undefined;
 
 export function useAdvancedUnlock(wallet: string | undefined) {
   const chainId      = useChainId();
@@ -14,8 +16,8 @@ export function useAdvancedUnlock(wallet: string | undefined) {
 
   const contractAddress = getReadingContractAddress(chainId);
 
-  // Read unlock state directly from the contract (on-chain source of truth)
-  const { data: isUnlocked = false, refetch } = useReadContract({
+  // Still read on-chain state — catches users who unlocked via old approve+contract flow
+  const { data: isUnlocked = false } = useReadContract({
     address: contractAddress,
     abi: READING_CONTRACT_ABI,
     functionName: 'hasAdvanced',
@@ -23,69 +25,69 @@ export function useAdvancedUnlock(wallet: string | undefined) {
     query: { enabled: !!contractAddress && !!wallet },
   });
 
-  const [isPaying, setIsPaying] = useState(false);
-  const [error, setError]       = useState<string | null>(null);
+  const [isPaying,     setIsPaying]     = useState(false);
+  const [isConfirming, setIsConfirming] = useState(false);
+  const [isVerifying,  setIsVerifying]  = useState(false);
+  const [error,        setError]        = useState<string | null>(null);
 
   const initiate = useCallback(async () => {
-    if (!wallet || !walletClient || !publicClient) return;
-    if (!contractAddress) {
-      setError('Contract not deployed — add VITE_READING_CONTRACT_TESTNET to .env after deploying');
-      return;
-    }
+    if (!wallet || !walletClient || !publicClient || !TREASURY) return;
     const usdcAddress = USDC_ADDRESSES[chainId];
     if (!usdcAddress) { setError('USDC not available on this chain'); return; }
 
     setIsPaying(true);
+    setIsConfirming(false);
+    setIsVerifying(false);
     setError(null);
 
-    // Helper: cast away Celo-extension types that viem doesn't type natively
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const write = walletClient.writeContract as (args: any) => Promise<`0x${string}`>;
-    const feeCurrency = getFeeCurrencyAddress('USDC', chainId);
-
     try {
-      // 1. Approve the contract to spend USDC (if not already sufficient)
-      const allowance = await publicClient.readContract({
-        address: usdcAddress,
+      // Direct ERC-20 transfer to treasury — MiniPay decodes this as "$0.50 USDC"
+      // instead of "Unknown transaction" from the approve+transferFrom flow
+      const data = encodeFunctionData({
         abi: erc20Abi,
-        functionName: 'allowance',
-        args: [wallet as `0x${string}`, contractAddress],
-      }) as bigint;
+        functionName: 'transfer',
+        args: [TREASURY, ADVANCED_PRICE],
+      });
+      const feeCurrency = getFeeCurrencyAddress('USDC', chainId);
 
-      if (allowance < ADVANCED_PRICE) {
-        const approveHash = await write({
-          address: usdcAddress,
-          abi: erc20Abi,
-          functionName: 'approve',
-          args: [contractAddress, ADVANCED_PRICE],
-          feeCurrency,
-        });
-        await publicClient.waitForTransactionReceipt({ hash: approveHash });
-      }
-
-      // 2. Call unlockAdvanced() — contract pulls USDC and sets hasAdvanced[msg.sender]
-      const unlockHash = await write({
-        address: contractAddress,
-        abi: READING_CONTRACT_ABI,
-        functionName: 'unlockAdvanced',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const txHash = await (walletClient.sendTransaction as (args: any) => Promise<`0x${string}`>)({
+        to: usdcAddress,
+        data,
         feeCurrency,
       });
-      await publicClient.waitForTransactionReceipt({ hash: unlockHash });
 
-      await refetch();
+      setIsPaying(false);
+      setIsConfirming(true);
+      await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+      setIsConfirming(false);
+      setIsVerifying(true);
+      const resp = await fetch('/api/unlock-advanced', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wallet, txHash, chainId }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? 'Payment verification failed');
+      }
+
       void queryClient.invalidateQueries({ queryKey: ['credits', wallet] });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Transaction failed');
     } finally {
       setIsPaying(false);
+      setIsConfirming(false);
+      setIsVerifying(false);
     }
-  }, [wallet, walletClient, publicClient, contractAddress, chainId, refetch, queryClient]);
+  }, [wallet, walletClient, publicClient, chainId, queryClient]);
 
   return {
     isUnlocked: isUnlocked as boolean,
     isPaying,
-    isConfirming: false,
-    isVerifying: false,
+    isConfirming,
+    isVerifying,
     initiate,
     error,
   };
