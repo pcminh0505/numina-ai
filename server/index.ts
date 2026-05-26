@@ -337,7 +337,7 @@ app.post('/api/chat', async (req, res) => {
       const apiKey = LLM_BASE_URL ? LLM_API_KEY : (OPENROUTER_API_KEY ?? 'local');
       const model  = effectiveTier === 'advanced' && isOpenRouter ? LLM_MODEL_PAID : LLM_MODEL;
       const extraHeaders = isOpenRouter
-        ? { 'X-Title': 'MiniPay Numerology', 'HTTP-Referer': 'https://minipay.to' }
+        ? { 'X-Title': 'Numina AI', 'HTTP-Referer': 'https://minipay.to' }
         : {};
       await streamOpenAI(effectiveBaseUrl, apiKey, model, systemPrompt, messages, res, extraHeaders);
     } else {
@@ -440,5 +440,5 @@ app.get('/api/health', (_req, res) => {
 
 const PORT = process.env.PORT ?? 3001;
 app.listen(PORT, () => {
-  console.log(`Numerology API server running on http://localhost:${PORT}`);
+  console.log(`Numina AI API server running on http://localhost:${PORT}`);
 });

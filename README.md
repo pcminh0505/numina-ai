@@ -1,6 +1,6 @@
-# Numerology Advisor — MiniPay Mini App
+# Numina AI — MiniPay Mini App
 
-An AI-powered Pythagorean numerology reading app built natively for [MiniPay](https://minipay.to/) on Celo. Enter your name and birthday to receive an instant profile, then unlock deep interpretations and an ongoing AI conversation — all paid in USDC on-chain.
+An AI-powered Pythagorean numerology oracle and 1:1 AI consultant built natively for [MiniPay](https://minipay.to/) on Celo. Enter your name and birthday to receive an instant profile, then unlock deep interpretations and an ongoing AI conversation — all paid in USDC on-chain.
 
 Built for **Celo Proof of Ship** — May 2025.
 
@@ -30,7 +30,7 @@ Payment goes directly on-chain via the `NumerologyReading` smart contract deploy
 
 ### AI Chat Consultant
 
-Chat with an AI numerology advisor that knows your full profile. The AI responds like a warm, sharp personal consultant — short and conversational, not an academic lecture.
+Chat with Numina, an AI numerology consultant that knows your full profile. The AI responds like a warm, sharp personal coach — short and conversational, not an academic lecture.
 
 - **5 free messages per day** per wallet
 - **Buy 20 more for $0.20 USDC** — on-chain purchase, credits persist

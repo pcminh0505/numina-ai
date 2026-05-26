@@ -21,7 +21,7 @@ export function NumerologyAdvanced({ profile, unlockState, walletAddress }: Prop
   if (!isUnlocked) {
     return (
       <div className="na-paywall">
-        <h3 className="na-paywall-title">Advanced Numerology Insights</h3>
+        <h3 className="na-paywall-title">Advanced Numina AI Insights</h3>
         <p className="na-paywall-sub">
           Unlock your Personal Year, Life Pinnacles, and Core Challenges — deep
           interpretations drawn from the Pythagorean system.

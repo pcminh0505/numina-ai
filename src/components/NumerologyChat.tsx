@@ -22,7 +22,7 @@ interface ProfileData {
 }
 
 const INITIAL_PROMPT =
-  `Hi! I just saw my numerology profile. What's the most interesting or surprising thing you notice about my numbers? Start with the one insight that feels most "me" — keep it short and conversational, and ask me something at the end so we can dig deeper.`;
+  `Hi! I just saw my Numina AI numerology profile. What's the most interesting or surprising thing you notice about my numbers? Start with the one insight that feels most "me" — keep it short and conversational, and ask me something at the end so we can dig deeper.`;
 
 export function NumerologyChat() {
   const { address } = useConnection();
@@ -239,10 +239,10 @@ export function NumerologyChat() {
       <div className="numerology-chat">
         <div className="nc-entry-scroll">
           <div className="nc-hero">
-            <div className="nc-hero-icon">🔢</div>
-            <h1 className="nc-hero-title">Numerology Reading</h1>
+            <img src="/logo-icon.png" alt="Numina AI Logo" className="nc-hero-logo" style={{ width: 120, height: 120, marginBottom: 20, borderRadius: 24, boxShadow: '0 8px 30px rgba(170, 59, 255, 0.3)' }} />
+            <h1 className="nc-hero-title">Numina AI</h1>
             <p className="nc-hero-subtitle">
-              Discover your life path through the science of numbers — based on{' '}
+              Your onchain Pythagorean Oracle & 1:1 Numerology Consultant — based on{' '}
               <em>The Complete Book of Numerology</em> by David A. Phillips
             </p>
           </div>

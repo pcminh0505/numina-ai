@@ -1,6 +1,6 @@
-# MiniPay Numerology — Project Guide
+# Numina AI — Project Guide
 
-An AI-powered Pythagorean numerology advisor built as a MiniPay Mini App on Celo. Users get a free instant profile, unlock advanced insights via on-chain USDC micropayment, and chat with an AI consultant backed by a configurable LLM.
+An AI-powered Pythagorean numerology oracle and 1:1 AI consultant built as a MiniPay Mini App on Celo. Users get a free instant profile, unlock advanced insights via on-chain USDC micropayment, and chat with an AI consultant backed by a configurable LLM.
 
 ## Stack
 
