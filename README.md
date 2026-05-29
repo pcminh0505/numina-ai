@@ -22,22 +22,20 @@
 
 ## Screenshots
 
-| Entry | Profile | Advanced Insights | AI Chat |
-|:---:|:---:|:---:|:---:|
+|                    Entry                    |                     Profile                     |                 Advanced Insights                 |                  AI Chat                  |
+| :-----------------------------------------: | :---------------------------------------------: | :-----------------------------------------------: | :---------------------------------------: |
 | ![Entry screen](docs/screenshots/entry.png) | ![Profile screen](docs/screenshots/profile.png) | ![Advanced screen](docs/screenshots/advanced.png) | ![Chat screen](docs/screenshots/chat.png) |
-| Name & birthday form | Free instant numerology profile | Paid deep reading ($0.50 USDC) | Live AI consultant chat |
-
-> Add your MiniPay screenshots to `docs/screenshots/` matching the filenames above.
+|            Name & birthday form             |         Free instant numerology profile         |          Paid deep reading ($0.50 USDC)           |          Live AI consultant chat          |
 
 ---
 
 ## Live Deployment
 
-| Service | URL |
-|---|---|
-| **App (frontend)** | https://numina-ai.pcminh0505.workers.dev |
-| **API (backend)** | https://numina-ai-api.fly.dev |
-| **LLM proxy** | https://numina-ai-llm.pcminh0505.workers.dev |
+| Service            | URL                                          |
+| ------------------ | -------------------------------------------- |
+| **App (frontend)** | https://numina-ai.pcminh0505.workers.dev     |
+| **API (backend)**  | https://numina-ai-api.fly.dev                |
+| **LLM proxy**      | https://numina-ai-llm.pcminh0505.workers.dev |
 
 **Stack:** Cloudflare Workers (frontend + LLM proxy) · Fly.io Singapore (Express API) · Cloudflare Workers AI `@cf/meta/llama-3.3-70b-instruct-fp8-fast`
 
@@ -57,7 +55,7 @@ Enter your name and birthday. Your profile computes instantly in the browser:
 
 ### Paid — Advanced Reading ($0.50 USDC)
 
-Unlock a deeper layer powered by David A. Phillips' *The Complete Book of Numerology*:
+Unlock a deeper layer powered by David A. Phillips' _The Complete Book of Numerology_:
 
 - **Personal Year** — your current 9-year cycle theme
 - **Life Pinnacles** — a visual timeline showing 4 major life phases with age ranges and interpretations
@@ -118,11 +116,11 @@ Browser
 
 ### Components
 
-| Component | Platform | Config |
-|---|---|---|
-| Frontend (React/Vite) | Cloudflare Workers | `wrangler.toml` + `worker/proxy.js` |
-| API server (Express) | Fly.io SIN | `fly.toml` + `Dockerfile` |
-| LLM proxy | Cloudflare Workers | `wrangler.ai-proxy.toml` + `worker/ai-proxy.js` |
+| Component             | Platform           | Config                                          |
+| --------------------- | ------------------ | ----------------------------------------------- |
+| Frontend (React/Vite) | Cloudflare Workers | `wrangler.toml` + `worker/proxy.js`             |
+| API server (Express)  | Fly.io SIN         | `fly.toml` + `Dockerfile`                       |
+| LLM proxy             | Cloudflare Workers | `wrangler.ai-proxy.toml` + `worker/ai-proxy.js` |
 
 The LLM proxy translates Cloudflare Workers AI's SSE format into OpenAI-compatible SSE so the backend's existing streaming code works unchanged. The proxy is protected by a shared secret (`AI_SECRET` wrangler secret).
 
@@ -145,24 +143,24 @@ npx wrangler deploy --config wrangler.ai-proxy.toml
 
 The server supports three interchangeable backends (configured via env / Fly.io secrets):
 
-| Priority | Backend | Config |
-|---|---|---|
-| 1 | Cloudflare Workers AI (production) | `LLM_BASE_URL=https://numina-ai-llm.pcminh0505.workers.dev/v1` |
-| 2 | Local (mlx-lm, Ollama) | `LLM_BASE_URL=http://localhost:8080/v1` |
-| 3 | OpenRouter | `OPENROUTER_API_KEY=...` |
-| 4 | Anthropic API | `ANTHROPIC_API_KEY=...` |
+| Priority | Backend                            | Config                                                         |
+| -------- | ---------------------------------- | -------------------------------------------------------------- |
+| 1        | Cloudflare Workers AI (production) | `LLM_BASE_URL=https://numina-ai-llm.pcminh0505.workers.dev/v1` |
+| 2        | Local (mlx-lm, Ollama)             | `LLM_BASE_URL=http://localhost:8080/v1`                        |
+| 3        | OpenRouter                         | `OPENROUTER_API_KEY=...`                                       |
+| 4        | Anthropic API                      | `ANTHROPIC_API_KEY=...`                                        |
 
 ---
 
 ## Proof of Ship Checklist
 
-| Requirement | Status |
-|---|---|
-| MiniPay integration (`useAutoConnect`, `isMiniPayEnvironment`, fee abstraction) | Done |
-| Smart contract deployed on Celo mainnet | `NumerologyReading.sol` at `0x06a0De14485e6b9F4045821C54b719ECeCc35613` |
-| On-chain USDC transactions | Every advanced unlock + credit purchase |
-| ERC-8004 agent registration | `pnpm register:agent` → tx on Celo Sepolia/mainnet |
-| Self.xyz Agent ID | `SELF_AGENT_ID` in `.env` → exposed at `GET /api/health` |
+| Requirement                                                                     | Status                                                                  |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| MiniPay integration (`useAutoConnect`, `isMiniPayEnvironment`, fee abstraction) | Done                                                                    |
+| Smart contract deployed on Celo mainnet                                         | `NumerologyReading.sol` at `0x06a0De14485e6b9F4045821C54b719ECeCc35613` |
+| On-chain USDC transactions                                                      | Every advanced unlock + credit purchase                                 |
+| ERC-8004 agent registration                                                     | `pnpm register:agent` → tx on Celo Sepolia/mainnet                      |
+| Self.xyz Agent ID                                                               | `SELF_AGENT_ID` in `.env` → exposed at `GET /api/health`                |
 
 ---
 
@@ -295,12 +293,12 @@ scripts/
 
 ## Contract Addresses
 
-| Contract | Network | Address |
-|---|---|---|
+| Contract          | Network      | Address                                      |
+| ----------------- | ------------ | -------------------------------------------- |
 | NumerologyReading | Celo Sepolia | `0x8fD193Aa77835D54E83B1Ddcc0FbAa4042295e0C` |
 | NumerologyReading | Celo mainnet | `0x06a0De14485e6b9F4045821C54b719ECeCc35613` |
-| USDC | Celo mainnet | `0xcebA9300f2b948710d2653dD7B07f33A8B32118C` |
-| USDC | Celo Sepolia | `0x01C5C0122039549Ad1493B8220cABEdD739BC44E` |
+| USDC              | Celo mainnet | `0xcebA9300f2b948710d2653dD7B07f33A8B32118C` |
+| USDC              | Celo Sepolia | `0x01C5C0122039549Ad1493B8220cABEdD739BC44E` |
 | ERC-8004 Registry | Celo mainnet | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
 | ERC-8004 Registry | Celo Sepolia | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 
@@ -310,4 +308,4 @@ scripts/
 - [Celo fee abstraction — CIP-64](https://docs.celo.org/tooling/overview/fee-abstraction)
 - [ERC-8004 Agent Trust Protocol](https://eips.ethereum.org/EIPS/eip-8004)
 - [Celo token contracts](https://docs.celo.org/tooling/contracts/token-contracts)
-- *The Complete Book of Numerology* by David A. Phillips (Hay House)
+- _The Complete Book of Numerology_ by David A. Phillips (Hay House)
