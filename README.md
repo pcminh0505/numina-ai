@@ -1,8 +1,33 @@
 # Numina AI — MiniPay Mini App
 
-An AI-powered Pythagorean numerology oracle and 1:1 AI consultant built natively for [MiniPay](https://minipay.to/) on Celo. Enter your name and birthday to receive an instant profile, then unlock deep interpretations and an ongoing AI conversation — all paid in USDC on-chain.
+<p align="center">
+  <img src="src/assets/logo.png" alt="Numina AI" width="120" />
+</p>
 
-Built for **Celo Proof of Ship** — May 2025.
+<p align="center">
+  An AI-powered Pythagorean numerology oracle and 1:1 AI consultant built natively for <a href="https://minipay.to/">MiniPay</a> on Celo.<br/>
+  Enter your name and birthday to receive an instant profile, then unlock deep interpretations<br/>
+  and an ongoing AI conversation — all paid in USDC on-chain.
+</p>
+
+<p align="center">
+  Built for <strong>Celo Proof of Ship</strong> — May 2025
+</p>
+
+<p align="center">
+  <img src="src/assets/hero.png" alt="Numina AI Birth Chart" width="480" />
+</p>
+
+---
+
+## Screenshots
+
+| Entry | Profile | Advanced Insights | AI Chat |
+|:---:|:---:|:---:|:---:|
+| ![Entry screen](docs/screenshots/entry.png) | ![Profile screen](docs/screenshots/profile.png) | ![Advanced screen](docs/screenshots/advanced.png) | ![Chat screen](docs/screenshots/chat.png) |
+| Name & birthday form | Free instant numerology profile | Paid deep reading ($0.50 USDC) | Live AI consultant chat |
+
+> Add your MiniPay screenshots to `docs/screenshots/` matching the filenames above.
 
 ---
 
