@@ -23,6 +23,18 @@ export function useBuyCredits(wallet: string | undefined) {
     const usdcAddress = USDC_ADDRESSES[chainId];
     if (!usdcAddress) { setError('USDC not available on this chain'); return; }
 
+    // Check USDC balance before touching any tx — avoids raw viem gas-estimation errors
+    const balance = await publicClient.readContract({
+      address: usdcAddress,
+      abi: erc20Abi,
+      functionName: 'balanceOf',
+      args: [wallet as `0x${string}`],
+    }) as bigint;
+    if (balance < CREDITS_PRICE) {
+      setError('Insufficient USDC balance. You need at least $0.20 USDC to buy credits.');
+      return;
+    }
+
     setIsPaying(true);
     setIsConfirming(false);
     setIsVerifying(false);

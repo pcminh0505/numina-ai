@@ -35,6 +35,18 @@ export function useAdvancedUnlock(wallet: string | undefined) {
     const usdcAddress = USDC_ADDRESSES[chainId];
     if (!usdcAddress) { setError('USDC not available on this chain'); return; }
 
+    // Check USDC balance before touching any tx — avoids raw viem gas-estimation errors
+    const balance = await publicClient.readContract({
+      address: usdcAddress,
+      abi: erc20Abi,
+      functionName: 'balanceOf',
+      args: [wallet as `0x${string}`],
+    }) as bigint;
+    if (balance < ADVANCED_PRICE) {
+      setError('Insufficient USDC balance. You need at least $0.50 USDC to unlock advanced insights.');
+      return;
+    }
+
     setIsPaying(true);
     setIsConfirming(false);
     setIsVerifying(false);
