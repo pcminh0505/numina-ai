@@ -317,7 +317,7 @@ export function NumerologyChat() {
             <div className="nc-advanced-inline">
               <NumerologyAdvanced
                 profile={computed as ReturnType<typeof computeAdvancedProfile>}
-                unlockState={advancedUnlock}
+                unlockState={{ ...advancedUnlock, isUnlocked: true }}
                 walletAddress={address}
               />
             </div>

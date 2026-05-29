@@ -6,6 +6,18 @@ Built for **Celo Proof of Ship** — May 2025.
 
 ---
 
+## Live Deployment
+
+| Service | URL |
+|---|---|
+| **App (frontend)** | https://numina-ai.pcminh0505.workers.dev |
+| **API (backend)** | https://numina-ai-api.fly.dev |
+| **LLM proxy** | https://numina-ai-llm.pcminh0505.workers.dev |
+
+**Stack:** Cloudflare Workers (frontend + LLM proxy) · Fly.io Singapore (Express API) · Cloudflare Workers AI `@cf/meta/llama-3.3-70b-instruct-fp8-fast`
+
+---
+
 ## What It Does
 
 ### Free — Instant Profile (no AI, no cost)
@@ -70,15 +82,50 @@ All gas fees paid in USDC via Celo's CIP-64 fee abstraction.
 
 ---
 
+## Infrastructure
+
+```
+Browser
+  └─► Cloudflare Workers (numina-ai) — static Vite build + /api/* proxy
+        └─► Fly.io Express (numina-ai-api, Singapore) — credit gating, on-chain reads
+              └─► Cloudflare Workers AI (numina-ai-llm) — Llama 3.3 70B FP8
+```
+
+### Components
+
+| Component | Platform | Config |
+|---|---|---|
+| Frontend (React/Vite) | Cloudflare Workers | `wrangler.toml` + `worker/proxy.js` |
+| API server (Express) | Fly.io SIN | `fly.toml` + `Dockerfile` |
+| LLM proxy | Cloudflare Workers | `wrangler.ai-proxy.toml` + `worker/ai-proxy.js` |
+
+The LLM proxy translates Cloudflare Workers AI's SSE format into OpenAI-compatible SSE so the backend's existing streaming code works unchanged. The proxy is protected by a shared secret (`AI_SECRET` wrangler secret).
+
+### Redeploy
+
+```bash
+# Frontend (after code change)
+pnpm build && npx wrangler deploy
+
+# Backend
+fly deploy --app numina-ai-api
+
+# LLM proxy (rarely needed)
+npx wrangler deploy --config wrangler.ai-proxy.toml
+```
+
+---
+
 ## LLM Backends
 
-The app supports three interchangeable backends (configured in `.env`):
+The server supports three interchangeable backends (configured via env / Fly.io secrets):
 
-| Backend | Config | Model |
+| Priority | Backend | Config |
 |---|---|---|
-| Local (mlx-lm, Ollama) | `LLM_BASE_URL=http://localhost:8080/v1` | Any OpenAI-compatible model |
-| OpenRouter | `OPENROUTER_API_KEY=...` | Free: Llama 3.3 70B / Paid tier: Claude 3.5 Sonnet |
-| Anthropic API | `ANTHROPIC_API_KEY=...` | Claude Sonnet 4.6 |
+| 1 | Cloudflare Workers AI (production) | `LLM_BASE_URL=https://numina-ai-llm.pcminh0505.workers.dev/v1` |
+| 2 | Local (mlx-lm, Ollama) | `LLM_BASE_URL=http://localhost:8080/v1` |
+| 3 | OpenRouter | `OPENROUTER_API_KEY=...` |
+| 4 | Anthropic API | `ANTHROPIC_API_KEY=...` |
 
 ---
 
@@ -87,7 +134,7 @@ The app supports three interchangeable backends (configured in `.env`):
 | Requirement | Status |
 |---|---|
 | MiniPay integration (`useAutoConnect`, `isMiniPayEnvironment`, fee abstraction) | Done |
-| Smart contract deployed on Celo mainnet | `NumerologyReading.sol` — deploy with `pnpm deploy:contract` |
+| Smart contract deployed on Celo mainnet | `NumerologyReading.sol` at `0x06a0De14485e6b9F4045821C54b719ECeCc35613` |
 | On-chain USDC transactions | Every advanced unlock + credit purchase |
 | ERC-8004 agent registration | `pnpm register:agent` → tx on Celo Sepolia/mainnet |
 | Self.xyz Agent ID | `SELF_AGENT_ID` in `.env` → exposed at `GET /api/health` |
@@ -200,6 +247,10 @@ server/
   bookExtractor.ts          # System prompt builder
   credits.ts                # Credit store (free daily + on-chain tracking)
 
+worker/
+  proxy.js                  # CF Worker: serves static site + proxies /api/* to Fly.io
+  ai-proxy.js               # CF Worker: OpenAI-compatible endpoint over Workers AI
+
 scripts/
   deployNumerologyReading.ts  # Deploy contract + print env vars
   registerERC8004.ts          # ERC-8004 on-chain agent registration
@@ -213,7 +264,20 @@ scripts/
 - [wagmi v3](https://wagmi.sh) + [viem](https://viem.sh)
 - [@tanstack/react-query v5](https://tanstack.com/query)
 - [Foundry](https://getfoundry.sh/) — Solidity testing + deployment
+- [Cloudflare Workers](https://workers.cloudflare.com/) — frontend + LLM proxy
+- [Fly.io](https://fly.io/) — Express API (Singapore)
 - Celo mainnet + Celo Sepolia
+
+## Contract Addresses
+
+| Contract | Network | Address |
+|---|---|---|
+| NumerologyReading | Celo Sepolia | `0x8fD193Aa77835D54E83B1Ddcc0FbAa4042295e0C` |
+| NumerologyReading | Celo mainnet | `0x06a0De14485e6b9F4045821C54b719ECeCc35613` |
+| USDC | Celo mainnet | `0xcebA9300f2b948710d2653dD7B07f33A8B32118C` |
+| USDC | Celo Sepolia | `0x01C5C0122039549Ad1493B8220cABEdD739BC44E` |
+| ERC-8004 Registry | Celo mainnet | `0x8004A169FB4a3325136EB29fA0ceB6D2e539a432` |
+| ERC-8004 Registry | Celo Sepolia | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 
 ## References
 

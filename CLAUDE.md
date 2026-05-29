@@ -24,6 +24,37 @@ DEPLOY_CHAIN=mainnet pnpm deploy:contract  # Deploy to Celo mainnet
 pnpm register:agent   # ERC-8004 on-chain identity registration
 ```
 
+## Production Deployment
+
+```
+Browser
+  └─► Cloudflare Workers (numina-ai) — static Vite build + /api/* proxy
+        └─► Fly.io Express (numina-ai-api, Singapore, auto-scale-to-zero)
+              └─► Cloudflare Workers AI (numina-ai-llm) — Llama 3.3 70B FP8
+```
+
+| Component | URL | Config |
+|---|---|---|
+| Frontend | https://numina-ai.pcminh0505.workers.dev | `wrangler.toml` + `worker/proxy.js` |
+| API backend | https://numina-ai-api.fly.dev | `fly.toml` + `Dockerfile` |
+| LLM proxy | https://numina-ai-llm.pcminh0505.workers.dev | `wrangler.ai-proxy.toml` + `worker/ai-proxy.js` |
+
+### Redeploy commands
+
+```bash
+pnpm build && npx wrangler deploy                          # frontend
+fly deploy --app numina-ai-api                             # backend
+npx wrangler deploy --config wrangler.ai-proxy.toml       # LLM proxy (rarely needed)
+```
+
+### How the LLM proxy works
+
+`worker/ai-proxy.js` exposes `POST /v1/chat/completions` (OpenAI-compatible) backed by the `AI` binding (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`). It transforms the CF Workers AI SSE format (`data: {"response":"..."}`) into OpenAI SSE format (`data: {"choices":[{"delta":{"content":"..."}}]}`), so the existing `streamOpenAI()` function in `server/index.ts` works with no changes. Protected by `AI_SECRET` (wrangler secret).
+
+### Notes on in-memory state
+
+The in-memory credit store (`server/credits.ts`) resets when Fly.io auto-stops the machine after idle. On-chain state (`hasAdvanced`, `creditsPurchased`) is always re-read from the Celo contract and is unaffected.
+
 ## Project Structure
 
 ```
@@ -58,6 +89,10 @@ server/
   bookExtractor.ts               # buildSystemPrompt() — profile + book passages + tier
   credits.ts                     # In-memory credit store (free daily + on-chain tracking)
 
+worker/
+  proxy.js                       # CF Worker: static site + /api/* reverse proxy to Fly.io
+  ai-proxy.js                    # CF Worker: OpenAI-compatible endpoint over Workers AI
+
 contracts/
   NumerologyReading.sol          # On-chain payment: hasAdvanced + creditsPurchased
   SimpleCounter.sol              # Demo counter
@@ -86,7 +121,7 @@ entry  ──[form submit]──►  profile  ──[Chat button]──►  chat
 ## LLM Backend Priority
 
 ```
-LLM_BASE_URL set       →  local OpenAI-compatible (mlx-lm, Ollama…)
+LLM_BASE_URL set       →  OpenAI-compatible endpoint (production: CF Workers AI proxy)
 OPENROUTER_API_KEY     →  OpenRouter (free: Llama 3.3 70B / paid tier: Claude 3.5 Sonnet)
 ANTHROPIC_API_KEY      →  Anthropic SDK (Claude Sonnet 4.6)
 ```
@@ -105,7 +140,7 @@ ANTHROPIC_API_KEY      →  Anthropic SDK (Claude Sonnet 4.6)
 
 | Source | Amount | Reset |
 |---|---|---|
-| Free | 5 messages/wallet | Daily UTC midnight |
+| Free | 5 messages/wallet | Daily UTC midnight (resets on server restart too) |
 | Referral bonus | +5 to both wallets | One-time per pair |
 | Purchased (on-chain) | 20 per pack ($0.20 USDC) | Never |
 | Advanced unlock | Permanent | Never |
@@ -173,23 +208,31 @@ Never use hardcoded colors — always use tokens from `src/index.css`:
 
 ## Environment Variables
 
-| Variable | Side | Purpose |
-|---|---|---|
-| `VITE_X402_TREASURY_ADDRESS` | Client | USDC payment recipient |
-| `VITE_READING_CONTRACT_TESTNET` | Client | NumerologyReading on Celo Sepolia |
-| `VITE_READING_CONTRACT_MAINNET` | Client | NumerologyReading on Celo mainnet |
-| `ANTHROPIC_API_KEY` | Server | Anthropic SDK fallback |
-| `OPENROUTER_API_KEY` | Server | OpenRouter inference |
-| `LLM_BASE_URL` | Server | Local/custom OpenAI-compatible endpoint |
-| `LLM_MODEL` / `LLM_MODEL_PAID` | Server | Model names for free / advanced tier |
-| `LLM_ENABLE_THINKING` | Server | Strip `<think>` tokens (`false` = strip) |
-| `X402_TREASURY_ADDRESS` | Server | Same as VITE_ version |
-| `X402_ADVANCED_PRICE` | Server | USDC units (default: 500000 = $0.50) |
-| `X402_CREDITS_PRICE` | Server | USDC units per pack (default: 200000 = $0.20) |
-| `READING_CONTRACT_TESTNET` | Server | Contract address for viem reads |
-| `READING_CONTRACT_MAINNET` | Server | Contract address for viem reads |
-| `SELF_AGENT_ID` | Server | Self.xyz Agent ID (exposed at /api/health) |
-| `REGISTER_PRIVATE_KEY` | Script only | Deployer key — never in frontend bundle |
+### Client-side (baked in at `pnpm build`)
+
+| Variable | Purpose |
+|---|---|
+| `VITE_X402_TREASURY_ADDRESS` | USDC payment recipient |
+| `VITE_READING_CONTRACT_TESTNET` | NumerologyReading on Celo Sepolia |
+| `VITE_READING_CONTRACT_MAINNET` | NumerologyReading on Celo mainnet |
+
+### Server-side (Fly.io secrets in production)
+
+| Variable | Purpose |
+|---|---|
+| `LLM_BASE_URL` | OpenAI-compatible LLM endpoint (production: CF Workers AI proxy `/v1`) |
+| `LLM_API_KEY` | API key for the LLM endpoint (production: `AI_SECRET` of the proxy) |
+| `LLM_MODEL` / `LLM_MODEL_PAID` | Model names for free / advanced tier |
+| `LLM_ENABLE_THINKING` | Strip `<think>` tokens (`false` = strip) |
+| `ANTHROPIC_API_KEY` | Anthropic SDK fallback |
+| `OPENROUTER_API_KEY` | OpenRouter inference fallback |
+| `X402_TREASURY_ADDRESS` | Server-side copy of treasury address |
+| `X402_ADVANCED_PRICE` | USDC units (default: 500000 = $0.50) |
+| `X402_CREDITS_PRICE` | USDC units per pack (default: 200000 = $0.20) |
+| `READING_CONTRACT_TESTNET` | Contract address for viem reads |
+| `READING_CONTRACT_MAINNET` | Contract address for viem reads |
+| `SELF_AGENT_ID` | Self.xyz Agent ID (exposed at `/api/health`) |
+| `REGISTER_PRIVATE_KEY` | Deployer key — script only, never in frontend bundle |
 
 ## Rules
 
@@ -197,7 +240,7 @@ Never use hardcoded colors — always use tokens from `src/index.css`:
 2. **Never hardcode colors** — use CSS design tokens
 3. **MiniPay only shows USDC / USDT / USDm** — never expose CELO as a payment option
 4. **6-decimal tokens need adapter addresses for feeCurrency** — see `feeCurrency.ts`
-5. **Server must run alongside frontend** — `pnpm dev:server` on port 3001
+5. **Server must run alongside frontend** — `pnpm dev:server` on port 3001 (dev) or Fly.io (prod)
 6. **Foundry artifacts gitignored** — `out/` and `cache/` are never committed
 
 ## Testing in MiniPay

@@ -1,0 +1,6 @@
+name = "numina-ai-llm"
+main = "worker/ai-proxy.js"
+compatibility_date = "2025-05-01"
+
+[ai]
+binding = "AI"

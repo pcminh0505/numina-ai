@@ -1,0 +1,11 @@
+name = "numina-ai"
+main = "worker/proxy.js"
+compatibility_date = "2025-05-01"
+
+# Static assets from the Vite build output
+[assets]
+directory = "./dist"
+
+# Backend URL is set here as a var — update after fly deploy
+[vars]
+BACKEND_URL = "https://numina-ai-api.fly.dev"
