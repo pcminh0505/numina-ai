@@ -293,6 +293,7 @@
 
 .nc-buy-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .nc-buy-error { font-size: 0.75rem; color: #e45c5c; }
+.nc-usdc-hint { font-size: 0.72rem; color: var(--text); opacity: 0.6; text-align: center; }
 
 /* ── Input row ── */
 .nc-input-row {
@@ -681,6 +682,7 @@
 .na-unlock-btn:active                { transform: scale(0.98); }
 
 .na-error { font-size: 0.78rem; color: #e45c5c; text-align: center; margin: 0; }
+.na-usdc-hint { font-size: 0.75rem; color: var(--text); opacity: 0.55; text-align: center; margin: 0; }
 
 /* ── Unlocked content ── */
 .na-content {

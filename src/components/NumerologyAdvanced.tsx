@@ -45,19 +45,22 @@ export function NumerologyAdvanced({ profile, unlockState, walletAddress }: Prop
         {!walletAddress ? (
           <p className="na-no-wallet">Connect your wallet to unlock advanced insights.</p>
         ) : (
-          <button
-            className="na-unlock-btn"
-            onClick={initiate}
-            disabled={isPaying || isConfirming || isVerifying}
-          >
-            {isPaying
-              ? 'Confirm in MiniPay...'
-              : isConfirming
-                ? 'Confirming...'
-                : isVerifying
-                  ? 'Verifying payment...'
-                  : 'Unlock All Advanced Insights — $0.50 USDC'}
-          </button>
+          <>
+            <button
+              className="na-unlock-btn"
+              onClick={initiate}
+              disabled={isPaying || isConfirming || isVerifying}
+            >
+              {isPaying
+                ? 'Confirm in MiniPay...'
+                : isConfirming
+                  ? 'Confirming...'
+                  : isVerifying
+                    ? 'Verifying payment...'
+                    : 'Unlock All Advanced Insights — $0.50 USDC'}
+            </button>
+            <p className="na-usdc-hint">You need USDC in your wallet to pay. Make sure you have at least $0.50 USDC before unlocking.</p>
+          </>
         )}
 
         {error && <p className="na-error">{error}</p>}

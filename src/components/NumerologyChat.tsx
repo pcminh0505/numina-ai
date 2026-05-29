@@ -404,19 +404,22 @@ export function NumerologyChat() {
         <div className="nc-credits-depleted">
           <span>No messages left today.</span>
           {address && (
-            <button
-              className="nc-buy-btn"
-              onClick={buyCredits.initiate}
-              disabled={buyCredits.isPaying || buyCredits.isConfirming || buyCredits.isVerifying}
-            >
-              {buyCredits.isPaying
-                ? 'Confirm...'
-                : buyCredits.isConfirming
-                  ? 'Confirming...'
-                  : buyCredits.isVerifying
-                    ? 'Verifying...'
-                    : 'Buy 20 msgs for $0.20 USDC'}
-            </button>
+            <>
+              <button
+                className="nc-buy-btn"
+                onClick={buyCredits.initiate}
+                disabled={buyCredits.isPaying || buyCredits.isConfirming || buyCredits.isVerifying}
+              >
+                {buyCredits.isPaying
+                  ? 'Confirm...'
+                  : buyCredits.isConfirming
+                    ? 'Confirming...'
+                    : buyCredits.isVerifying
+                      ? 'Verifying...'
+                      : 'Buy 20 msgs for $0.20 USDC'}
+              </button>
+              <span className="nc-usdc-hint">Requires $0.20 USDC in your wallet.</span>
+            </>
           )}
           {buyCredits.error && (
             <span className="nc-buy-error">{buyCredits.error}</span>
